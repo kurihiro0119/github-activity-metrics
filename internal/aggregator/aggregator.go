@@ -4,17 +4,12 @@ import (
 	"context"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/kurihiro0119/github-activity-metrics/internal/domain"
 	"github.com/kurihiro0119/github-activity-metrics/internal/storage"
 )
 
 // Aggregator defines the interface for aggregating metrics
 type Aggregator interface {
-	// AggregateEvents aggregates events into metrics
-	AggregateEvents(ctx context.Context, events []*domain.Event, timeRange domain.TimeRange) ([]*domain.Metric, error)
-
 	// AggregateOrgMetrics aggregates organization-level metrics
 	AggregateOrgMetrics(ctx context.Context, org string, timeRange domain.TimeRange) (*domain.OrgMetrics, error)
 
@@ -44,90 +39,6 @@ func NewAggregator(storage storage.Storage) Aggregator {
 	return &aggregator{
 		storage: storage,
 	}
-}
-
-// AggregateEvents aggregates events into metrics
-func (a *aggregator) AggregateEvents(ctx context.Context, events []*domain.Event, timeRange domain.TimeRange) ([]*domain.Metric, error) {
-	// Group events by time period based on granularity
-	periodEvents := make(map[time.Time][]*domain.Event)
-
-	for _, event := range events {
-		period := truncateTime(event.Timestamp, timeRange.Granularity)
-		periodEvents[period] = append(periodEvents[period], event)
-	}
-
-	var metrics []*domain.Metric
-	now := time.Now()
-
-	for period, evts := range periodEvents {
-		// Count events by type
-		commitCount := int64(0)
-		prCount := int64(0)
-		deployCount := int64(0)
-
-		for _, evt := range evts {
-			switch evt.Type {
-			case domain.EventTypeCommit:
-				commitCount++
-			case domain.EventTypePullRequest:
-				prCount++
-			case domain.EventTypeDeploy:
-				deployCount++
-			}
-		}
-
-		periodEnd := getNextPeriod(period, timeRange.Granularity)
-
-		if commitCount > 0 {
-			metrics = append(metrics, &domain.Metric{
-				ID:   uuid.New().String(),
-				Type: domain.MetricTypeCommit,
-				Org:  evts[0].Org,
-				TimeRange: domain.TimeRange{
-					Start:       period,
-					End:         periodEnd,
-					Granularity: timeRange.Granularity,
-				},
-				Value:     commitCount,
-				CreatedAt: now,
-				UpdatedAt: now,
-			})
-		}
-
-		if prCount > 0 {
-			metrics = append(metrics, &domain.Metric{
-				ID:   uuid.New().String(),
-				Type: domain.MetricTypePullRequest,
-				Org:  evts[0].Org,
-				TimeRange: domain.TimeRange{
-					Start:       period,
-					End:         periodEnd,
-					Granularity: timeRange.Granularity,
-				},
-				Value:     prCount,
-				CreatedAt: now,
-				UpdatedAt: now,
-			})
-		}
-
-		if deployCount > 0 {
-			metrics = append(metrics, &domain.Metric{
-				ID:   uuid.New().String(),
-				Type: domain.MetricTypeDeploy,
-				Org:  evts[0].Org,
-				TimeRange: domain.TimeRange{
-					Start:       period,
-					End:         periodEnd,
-					Granularity: timeRange.Granularity,
-				},
-				Value:     deployCount,
-				CreatedAt: now,
-				UpdatedAt: now,
-			})
-		}
-	}
-
-	return metrics, nil
 }
 
 // AggregateOrgMetrics aggregates organization-level metrics

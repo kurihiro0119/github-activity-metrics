@@ -1,4 +1,4 @@
-# 開発生産性可視化OSS 設計書
+# 開発生産性可視化 OSS 設計書
 
 ## 概要
 
@@ -247,25 +247,28 @@ type Storage interface {
 	// 生イベントの保存
 	SaveRawEvent(ctx context.Context, event *domain.Event) error
 	SaveRawEvents(ctx context.Context, events []*domain.Event) error
-	
+
 	// 集計メトリクスの保存
 	SaveAggregatedMetric(ctx context.Context, metric *domain.Metric) error
 	SaveAggregatedMetrics(ctx context.Context, metrics []*domain.Metric) error
-	
+
 	// メトリクス取得
 	GetMetricsByOrg(ctx context.Context, org string, timeRange domain.TimeRange) (*domain.OrgMetrics, error)
 	GetMetricsByMember(ctx context.Context, org, member string, timeRange domain.TimeRange) (*domain.MemberMetrics, error)
 	GetMetricsByRepo(ctx context.Context, org, repo string, timeRange domain.TimeRange) (*domain.RepoMetrics, error)
-	
+
 	// 時系列メトリクス取得
 	GetTimeSeriesMetrics(ctx context.Context, org string, metricType domain.MetricType, timeRange domain.TimeRange) ([]*domain.Metric, error)
-	
+
 	// イベント取得（再集計用）
 	GetEvents(ctx context.Context, org string, eventType domain.EventType, timeRange domain.TimeRange) ([]*domain.Event, error)
-	
+
+	// 最後のイベント時刻を取得（増分更新用）
+	GetLastEventTime(ctx context.Context, org string) (time.Time, error)
+
 	// マイグレーション
 	Migrate(ctx context.Context) error
-	
+
 	// 接続管理
 	Close() error
 }
@@ -286,16 +289,16 @@ import (
 type Collector interface {
 	// Organization の全 Repository を取得
 	GetRepositories(ctx context.Context, org string) ([]string, error)
-	
+
 	// Repository の commit を取得
 	GetCommits(ctx context.Context, org, repo string, since, until time.Time) ([]*domain.CommitEvent, error)
-	
+
 	// Repository の Pull Request を取得
 	GetPullRequests(ctx context.Context, org, repo string, since, until time.Time) ([]*domain.PullRequestEvent, error)
-	
+
 	// Repository のデプロイ情報を取得（GitHub Actions）
 	GetDeploys(ctx context.Context, org, repo string, since, until time.Time) ([]*domain.DeployEvent, error)
-	
+
 	// Organization のメンバー一覧を取得
 	GetMembers(ctx context.Context, org string) ([]string, error)
 }
@@ -356,13 +359,13 @@ import (
 type Aggregator interface {
 	// イベントからメトリクスを集計
 	AggregateEvents(ctx context.Context, events []*domain.Event, timeRange domain.TimeRange) ([]*domain.Metric, error)
-	
+
 	// Organization メトリクスを集計
 	AggregateOrgMetrics(ctx context.Context, org string, timeRange domain.TimeRange) (*domain.OrgMetrics, error)
-	
+
 	// Member メトリクスを集計
 	AggregateMemberMetrics(ctx context.Context, org, member string, timeRange domain.TimeRange) (*domain.MemberMetrics, error)
-	
+
 	// Repository メトリクスを集計
 	AggregateRepoMetrics(ctx context.Context, org, repo string, timeRange domain.TimeRange) (*domain.RepoMetrics, error)
 }
@@ -404,13 +407,13 @@ type Handler struct {
 func (h *Handler) GetOrgMetrics(w http.ResponseWriter, r *http.Request) {
 	org := getPathParam(r, "org")
 	timeRange := parseTimeRange(r)
-	
+
 	metrics, err := h.aggregator.AggregateOrgMetrics(r.Context(), org, timeRange)
 	if err != nil {
 		respondError(w, err)
 		return
 	}
-	
+
 	respondJSON(w, http.StatusOK, metrics)
 }
 
@@ -445,37 +448,57 @@ import (
 
 func SetupRoutes(handler *Handler) *gin.Engine {
 	router := gin.Default()
-	
+
 	v1 := router.Group("/api/v1")
 	{
 		orgs := v1.Group("/orgs/:org")
 		{
 			orgs.GET("/metrics", handler.GetOrgMetrics)
 			orgs.GET("/metrics/timeseries", handler.GetTimeSeriesMetrics)
-			
+
 			members := orgs.Group("/members")
 			{
 				members.GET("/:member/metrics", handler.GetMemberMetrics)
 			}
-			
+
 			repos := orgs.Group("/repos")
 			{
 				repos.GET("/:repo/metrics", handler.GetRepoMetrics)
 			}
 		}
 	}
-	
+
 	return router
 }
 ```
 
 ### 6. CLI
 
+#### 期間指定のデフォルト動作
+
+`collect` コマンドで期間を指定しない場合の動作：
+
+1. **既存データがある場合（増分更新）**
+
+   - 既存の events テーブルから該当 Organization の最新 `timestamp` を取得
+   - その日時から現在までを収集期間とする
+   - 既存データの重複を避けつつ、新しいデータのみを取得
+
+2. **既存データがない場合（初回収集）**
+
+   - `--days` フラグで指定された日数（デフォルト: 365 日）を直近から遡って収集
+   - `--all` フラグが指定された場合のみ、全期間を収集（非推奨: レート制限・時間がかかる）
+
+3. **期間指定がある場合**
+   - `--since` / `--until` で指定された期間を優先
+   - `--days` は無視される
+
 ```go
 // cmd/cli/main.go
 package main
 
 import (
+	"time"
 	"github.com/spf13/cobra"
 )
 
@@ -489,8 +512,55 @@ var collectCmd = &cobra.Command{
 	Short: "Collect data from GitHub",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		org := args[0]
+
+		// 期間指定の取得（オプション）
+		sinceStr, _ := cmd.Flags().GetString("since")
+		untilStr, _ := cmd.Flags().GetString("until")
+		days, _ := cmd.Flags().GetInt("days") // 直近N日
+		all, _ := cmd.Flags().GetBool("all")
+
+		// 期間の決定ロジック
+		var since, until time.Time
+
+		if all {
+			// 全期間収集（Repository の作成日時から現在まで）
+			// 注意: 非常に時間がかかる可能性がある
+			since = time.Time{} // ゼロ値 = 全期間
+			until = time.Now()
+		} else if sinceStr != "" || untilStr != "" {
+			// 明示的に期間指定がある場合
+			if sinceStr != "" {
+				since, _ = time.Parse("2006-01-02", sinceStr)
+			}
+			if untilStr != "" {
+				until, _ = time.Parse("2006-01-02", untilStr)
+			} else {
+				until = time.Now()
+			}
+		} else {
+			// 期間未指定: 既存データをチェック
+			lastEventTime := storage.GetLastEventTime(ctx, org)
+			if !lastEventTime.IsZero() {
+				// 増分更新: 最後のイベント時刻から現在まで
+				since = lastEventTime
+				until = time.Now()
+			} else {
+				// 初回収集: 直近N日
+				until = time.Now()
+				since = until.AddDate(0, 0, -days)
+			}
+		}
+
 		// Collector を実行してデータを収集・保存
+		return collector.CollectOrganizationData(ctx, org, since, until, onProgress)
 	},
+}
+
+func init() {
+	collectCmd.Flags().String("since", "", "Start date (YYYY-MM-DD or RFC3339)")
+	collectCmd.Flags().String("until", "", "End date (YYYY-MM-DD or RFC3339, default: now)")
+	collectCmd.Flags().Int("days", 365, "Number of days to collect (used when since/until not specified, default: 365)")
+	collectCmd.Flags().Bool("all", false, "Collect all available data (may take very long time)")
 }
 
 var showCmd = &cobra.Command{
@@ -621,12 +691,12 @@ func NewSQLiteStorage(dbPath string) (storage.Storage, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	s := &sqliteStorage{db: db}
 	if err := s.Migrate(context.Background()); err != nil {
 		return nil, err
 	}
-	
+
 	return s, nil
 }
 
@@ -660,12 +730,12 @@ func NewPostgresStorage(connStr string) (storage.Storage, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	s := &postgresStorage{db: db}
 	if err := s.Migrate(context.Background()); err != nil {
 		return nil, err
 	}
-	
+
 	return s, nil
 }
 
@@ -687,23 +757,23 @@ import (
 type Config struct {
 	// GitHub
 	GitHubToken string
-	
+
 	// Storage
 	StorageType string // "sqlite" or "postgres"
 	SQLitePath  string
 	PostgresURL string
-	
+
 	// API Server
 	APIPort string
 	APIHost string
-	
+
 	// CLI
 	APIEndpoint string
 }
 
 func Load() (*Config, error) {
 	_ = godotenv.Load() // .env ファイルを読み込み（エラーは無視）
-	
+
 	return &Config{
 		GitHubToken: getEnv("GITHUB_TOKEN", ""),
 		StorageType: getEnv("STORAGE_TYPE", "sqlite"),
@@ -778,66 +848,66 @@ func (c *githubCollector) CollectOrganizationData(
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// 並列処理用の channel
 	eventCh := make(chan *domain.Event, 100)
 	errCh := make(chan error, len(repos))
-	
+
 	// 各 Repository を並列で処理
 	var wg sync.WaitGroup
 	for i, repo := range repos {
 		wg.Add(1)
 		go func(r string, index int) {
 			defer wg.Done()
-			
+
 			// レート制限チェック
 			if err := c.rateLimiter.Wait(ctx); err != nil {
 				errCh <- err
 				return
 			}
-			
+
 			// Commit 取得
 			commits, err := c.GetCommits(ctx, org, r, since, until)
 			if err != nil {
 				errCh <- err
 				return
 			}
-			
+
 			for _, commit := range commits {
 				eventCh <- commit.ToEvent()
 			}
-			
+
 			// PR 取得
 			prs, err := c.GetPullRequests(ctx, org, r, since, until)
 			if err != nil {
 				errCh <- err
 				return
 			}
-			
+
 			for _, pr := range prs {
 				eventCh <- pr.ToEvent()
 			}
-			
+
 			// 進捗通知
 			if onProgress != nil {
 				onProgress(r, float64(index+1)/float64(len(repos)))
 			}
 		}(repo, i)
 	}
-	
+
 	// 完了を待機
 	go func() {
 		wg.Wait()
 		close(eventCh)
 		close(errCh)
 	}()
-	
+
 	// イベントを収集
 	var events []*domain.Event
 	for event := range eventCh {
 		events = append(events, event)
 	}
-	
+
 	// エラーチェック
 	select {
 	case err := <-errCh:
@@ -846,7 +916,7 @@ func (c *githubCollector) CollectOrganizationData(
 		}
 	default:
 	}
-	
+
 	return events, nil
 }
 ```
@@ -945,4 +1015,3 @@ github-metrics show member myorg username
 - エクスポート機能（CSV / JSON）
 - 複数 Organization 対応
 - 認証機能（API Server へのアクセス制御）
-

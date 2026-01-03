@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -51,27 +50,6 @@ func (s *sqliteStorage) Migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 	CREATE INDEX IF NOT EXISTS idx_events_org_type_timestamp ON events(org, type, timestamp);
-
-	CREATE TABLE IF NOT EXISTS metrics (
-		id TEXT PRIMARY KEY,
-		type TEXT NOT NULL,
-		org TEXT NOT NULL,
-		repo TEXT,
-		member TEXT,
-		value INTEGER NOT NULL,
-		time_range_start TIMESTAMP NOT NULL,
-		time_range_end TIMESTAMP NOT NULL,
-		granularity TEXT NOT NULL,
-		metadata TEXT,
-		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		UNIQUE(org, repo, member, type, time_range_start, time_range_end, granularity)
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_metrics_org ON metrics(org);
-	CREATE INDEX IF NOT EXISTS idx_metrics_repo ON metrics(org, repo);
-	CREATE INDEX IF NOT EXISTS idx_metrics_member ON metrics(org, member);
-	CREATE INDEX IF NOT EXISTS idx_metrics_time_range ON metrics(time_range_start, time_range_end);
 
 	CREATE TABLE IF NOT EXISTS repositories (
 		org TEXT NOT NULL,
@@ -159,86 +137,6 @@ func (s *sqliteStorage) SaveRawEvents(ctx context.Context, events []*domain.Even
 			event.Timestamp,
 			string(dataJSON),
 			event.CreatedAt,
-		)
-		if err != nil {
-			return err
-		}
-	}
-
-	return tx.Commit()
-}
-
-// SaveAggregatedMetric saves a single aggregated metric
-func (s *sqliteStorage) SaveAggregatedMetric(ctx context.Context, metric *domain.Metric) error {
-	var metadataJSON []byte
-	var err error
-	if metric.Metadata != nil {
-		metadataJSON, err = json.Marshal(metric.Metadata)
-		if err != nil {
-			return err
-		}
-	}
-
-	query := `
-		INSERT OR REPLACE INTO metrics (id, type, org, repo, member, value, time_range_start, time_range_end, granularity, metadata, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-	_, err = s.db.ExecContext(ctx, query,
-		metric.ID,
-		string(metric.Type),
-		metric.Org,
-		metric.Repo,
-		metric.Member,
-		metric.Value,
-		metric.TimeRange.Start,
-		metric.TimeRange.End,
-		metric.TimeRange.Granularity,
-		string(metadataJSON),
-		metric.CreatedAt,
-		metric.UpdatedAt,
-	)
-	return err
-}
-
-// SaveAggregatedMetrics saves multiple aggregated metrics
-func (s *sqliteStorage) SaveAggregatedMetrics(ctx context.Context, metrics []*domain.Metric) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT OR REPLACE INTO metrics (id, type, org, repo, member, value, time_range_start, time_range_end, granularity, metadata, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, metric := range metrics {
-		var metadataJSON []byte
-		if metric.Metadata != nil {
-			metadataJSON, err = json.Marshal(metric.Metadata)
-			if err != nil {
-				return err
-			}
-		}
-
-		_, err = stmt.ExecContext(ctx,
-			metric.ID,
-			string(metric.Type),
-			metric.Org,
-			metric.Repo,
-			metric.Member,
-			metric.Value,
-			metric.TimeRange.Start,
-			metric.TimeRange.End,
-			metric.TimeRange.Granularity,
-			string(metadataJSON),
-			metric.CreatedAt,
-			metric.UpdatedAt,
 		)
 		if err != nil {
 			return err
@@ -451,54 +349,6 @@ func (s *sqliteStorage) GetMetricsByRepo(ctx context.Context, org, repo string, 
 		if deletions, ok := data["deletions"].(float64); ok {
 			metrics.Deletions += int64(deletions)
 		}
-	}
-
-	return metrics, nil
-}
-
-// GetTimeSeriesMetrics retrieves time series metrics
-func (s *sqliteStorage) GetTimeSeriesMetrics(ctx context.Context, org string, metricType domain.MetricType, timeRange domain.TimeRange) ([]*domain.Metric, error) {
-	query := `
-		SELECT id, type, org, repo, member, value, time_range_start, time_range_end, granularity, metadata, created_at, updated_at
-		FROM metrics
-		WHERE org = ? AND type = ? AND time_range_start >= ? AND time_range_end <= ? AND granularity = ?
-		ORDER BY time_range_start
-	`
-	rows, err := s.db.QueryContext(ctx, query, org, string(metricType), timeRange.Start, timeRange.End, timeRange.Granularity)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var metrics []*domain.Metric
-	for rows.Next() {
-		var m domain.Metric
-		var repo, member sql.NullString
-		var metadataStr sql.NullString
-		var start, end time.Time
-
-		err := rows.Scan(&m.ID, &m.Type, &m.Org, &repo, &member, &m.Value, &start, &end, &m.TimeRange.Granularity, &metadataStr, &m.CreatedAt, &m.UpdatedAt)
-		if err != nil {
-			return nil, err
-		}
-
-		if repo.Valid {
-			m.Repo = &repo.String
-		}
-		if member.Valid {
-			m.Member = &member.String
-		}
-		m.TimeRange.Start = start
-		m.TimeRange.End = end
-
-		if metadataStr.Valid && metadataStr.String != "" {
-			var metadata map[string]interface{}
-			if err := json.Unmarshal([]byte(metadataStr.String), &metadata); err == nil {
-				m.Metadata = metadata
-			}
-		}
-
-		metrics = append(metrics, &m)
 	}
 
 	return metrics, nil
