@@ -43,6 +43,7 @@ cp .env.example .env
 | 変数名 | 説明 | デフォルト値 |
 |--------|------|-------------|
 | `GITHUB_TOKEN` | GitHub Personal Access Token | (必須) |
+| `MODE` | モード (`organization` または `user`) | `organization` |
 | `STORAGE_TYPE` | ストレージタイプ (`sqlite` または `postgres`) | `sqlite` |
 | `SQLITE_PATH` | SQLite データベースファイルのパス | `./metrics.db` |
 | `POSTGRES_URL` | PostgreSQL 接続 URL | - |
@@ -57,12 +58,19 @@ cp .env.example .env
 #### データ収集
 
 ```bash
-# Organization のデータを収集
+# Organization のデータを収集（MODE=organization の場合）
 ./bin/github-metrics collect <org-name>
+
+# 個人アカウントのデータを収集（MODE=user の場合）
+./bin/github-metrics collect <username>
 
 # 期間を指定して収集
 ./bin/github-metrics collect <org-name> --start 2024-01-01 --end 2024-12-31
 ```
+
+**モードの切り替え:**
+- 環境変数 `MODE=organization` で組織モード（デフォルト）
+- 環境変数 `MODE=user` で個人アカウントモード
 
 #### メトリクス表示
 
@@ -103,6 +111,7 @@ make run-api
 
 #### API エンドポイント
 
+**Organization エンドポイント:**
 | メソッド | パス | 説明 |
 |---------|------|------|
 | GET | `/health` | ヘルスチェック |
@@ -112,6 +121,14 @@ make run-api
 | GET | `/api/v1/orgs/:org/members/:member/metrics` | 特定メンバーメトリクス |
 | GET | `/api/v1/orgs/:org/repos/metrics` | 全リポジトリメトリクス |
 | GET | `/api/v1/orgs/:org/repos/:repo/metrics` | 特定リポジトリメトリクス |
+
+**User エンドポイント:**
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/v1/users/:user/metrics` | ユーザーメトリクス |
+| GET | `/api/v1/users/:user/metrics/timeseries` | ユーザー時系列メトリクス |
+| GET | `/api/v1/users/:user/repos/metrics` | 全リポジトリメトリクス |
+| GET | `/api/v1/users/:user/repos/:repo/metrics` | 特定リポジトリメトリクス |
 
 #### クエリパラメータ
 

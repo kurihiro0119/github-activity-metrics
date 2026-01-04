@@ -18,6 +18,7 @@ type Event struct {
 	Org       string
 	Repo      string
 	Member    string
+	OwnerType string // "organization" or "user"
 	Timestamp time.Time
 	Data      map[string]interface{}
 	CreatedAt time.Time
@@ -29,6 +30,7 @@ type CommitEvent struct {
 	Org          string
 	Repo         string
 	Member       string
+	OwnerType    string // "organization" or "user"
 	Timestamp    time.Time
 	Sha          string
 	Message      string
@@ -46,6 +48,7 @@ func (c *CommitEvent) ToEvent() *Event {
 		Org:       c.Org,
 		Repo:      c.Repo,
 		Member:    c.Member,
+		OwnerType: c.OwnerType,
 		Timestamp: c.Timestamp,
 		Data: map[string]interface{}{
 			"sha":           c.Sha,
@@ -64,6 +67,7 @@ type PullRequestEvent struct {
 	Org       string
 	Repo      string
 	Member    string
+	OwnerType string // "organization" or "user"
 	Timestamp time.Time
 	Number    int
 	State     string // open, closed, merged
@@ -88,6 +92,7 @@ func (p *PullRequestEvent) ToEvent() *Event {
 		Org:       p.Org,
 		Repo:      p.Repo,
 		Member:    p.Member,
+		OwnerType: p.OwnerType,
 		Timestamp: p.Timestamp,
 		Data:      data,
 		CreatedAt: p.CreatedAt,
@@ -100,6 +105,7 @@ type DeployEvent struct {
 	Org           string
 	Repo          string
 	Member        string
+	OwnerType     string // "organization" or "user"
 	Timestamp     time.Time
 	Environment   string
 	Status        string
@@ -115,6 +121,7 @@ func (d *DeployEvent) ToEvent() *Event {
 		Org:       d.Org,
 		Repo:      d.Repo,
 		Member:    d.Member,
+		OwnerType: d.OwnerType,
 		Timestamp: d.Timestamp,
 		Data: map[string]interface{}{
 			"environment":     d.Environment,

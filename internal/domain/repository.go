@@ -8,6 +8,7 @@ type Repository struct {
 	Name         string
 	FullName     string
 	IsPrivate    bool
+	OwnerType    string // "organization" or "user"
 	LastSyncedAt *time.Time
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -18,6 +19,7 @@ type Member struct {
 	Org          string
 	Username     string
 	DisplayName  string
+	OwnerType    string // "organization" or "user"
 	LastSyncedAt *time.Time
 	CreatedAt    time.Time
 	UpdatedAt    time.Time

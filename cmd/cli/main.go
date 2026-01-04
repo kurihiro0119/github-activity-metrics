@@ -36,9 +36,9 @@ and provides aggregated metrics for organizations, repositories, and members.`,
 }
 
 var collectCmd = &cobra.Command{
-	Use:   "collect [org]",
+	Use:   "collect [org|user]",
 	Short: "Collect data from GitHub",
-	Long:  `Collect activity data from a GitHub organization and store it locally.`,
+	Long:  `Collect activity data from a GitHub organization or user account and store it locally.`,
 	Args:  cobra.ExactArgs(1),
 	RunE:  runCollect,
 }
@@ -139,7 +139,7 @@ func getTimeRange() domain.TimeRange {
 }
 
 func runCollect(cmd *cobra.Command, args []string) error {
-	org := args[0]
+	target := args[0] // org or user
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -160,46 +160,93 @@ func runCollect(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	timeRange := getTimeRange()
 
-	fmt.Printf("Collecting data for organization: %s\n", org)
-	fmt.Printf("Time range: %s to %s\n", timeRange.Start.Format("2006-01-02"), timeRange.End.Format("2006-01-02"))
+	var repos []*domain.Repository
+	var events []*domain.Event
 
-	// Collect repositories
-	fmt.Println("Fetching repositories...")
-	repos, err := coll.GetRepositories(ctx, org)
-	if err != nil {
-		return fmt.Errorf("failed to get repositories: %w", err)
-	}
-	fmt.Printf("Found %d repositories\n", len(repos))
+	if cfg.Mode == "user" {
+		fmt.Printf("Collecting data for user: %s\n", target)
+		fmt.Printf("Time range: %s to %s\n", timeRange.Start.Format("2006-01-02"), timeRange.End.Format("2006-01-02"))
 
-	// Save repositories
-	for _, repo := range repos {
-		if err := store.SaveRepository(ctx, repo); err != nil {
-			fmt.Printf("Warning: failed to save repository %s: %v\n", repo.Name, err)
+		// Collect repositories
+		fmt.Println("Fetching repositories...")
+		repos, err = coll.GetUserRepositories(ctx, target)
+		if err != nil {
+			return fmt.Errorf("failed to get repositories: %w", err)
 		}
-	}
+		fmt.Printf("Found %d repositories\n", len(repos))
 
-	// Collect members
-	fmt.Println("Fetching members...")
-	members, err := coll.GetMembers(ctx, org)
-	if err != nil {
-		fmt.Printf("Warning: failed to get members: %v\n", err)
-	} else {
-		fmt.Printf("Found %d members\n", len(members))
-		for _, member := range members {
-			if err := store.SaveMember(ctx, member); err != nil {
-				fmt.Printf("Warning: failed to save member %s: %v\n", member.Username, err)
+		// Save repositories
+		for _, repo := range repos {
+			if err := store.SaveRepository(ctx, repo); err != nil {
+				fmt.Printf("Warning: failed to save repository %s: %v\n", repo.Name, err)
 			}
 		}
+
+		// Save user as member (for consistency)
+		now := time.Now()
+		member := &domain.Member{
+			Org:         target,
+			Username:    target,
+			DisplayName: target,
+			OwnerType:   "user",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if err := store.SaveMember(ctx, member); err != nil {
+			fmt.Printf("Warning: failed to save member %s: %v\n", member.Username, err)
+		}
+
+		// Collect events
+		fmt.Println("Collecting activity data...")
+		events, err = coll.CollectUserData(ctx, target, timeRange.Start, timeRange.End, func(repo string, progress float64) {
+			fmt.Printf("\rProgress: %.1f%% (%s)", progress*100, repo)
+		})
+		if err != nil {
+			return fmt.Errorf("failed to collect data: %w", err)
+		}
+	} else {
+		fmt.Printf("Collecting data for organization: %s\n", target)
+		fmt.Printf("Time range: %s to %s\n", timeRange.Start.Format("2006-01-02"), timeRange.End.Format("2006-01-02"))
+
+		// Collect repositories
+		fmt.Println("Fetching repositories...")
+		repos, err = coll.GetRepositories(ctx, target)
+		if err != nil {
+			return fmt.Errorf("failed to get repositories: %w", err)
+		}
+		fmt.Printf("Found %d repositories\n", len(repos))
+
+		// Save repositories
+		for _, repo := range repos {
+			if err := store.SaveRepository(ctx, repo); err != nil {
+				fmt.Printf("Warning: failed to save repository %s: %v\n", repo.Name, err)
+			}
+		}
+
+		// Collect members
+		fmt.Println("Fetching members...")
+		members, err := coll.GetMembers(ctx, target)
+		if err != nil {
+			fmt.Printf("Warning: failed to get members: %v\n", err)
+		} else {
+			fmt.Printf("Found %d members\n", len(members))
+			for _, member := range members {
+				if err := store.SaveMember(ctx, member); err != nil {
+					fmt.Printf("Warning: failed to save member %s: %v\n", member.Username, err)
+				}
+			}
+		}
+
+		// Collect events
+		fmt.Println("Collecting activity data...")
+		events, err = coll.CollectOrganizationData(ctx, target, timeRange.Start, timeRange.End, func(repo string, progress float64) {
+			fmt.Printf("\rProgress: %.1f%% (%s)", progress*100, repo)
+		})
+		if err != nil {
+			return fmt.Errorf("failed to collect data: %w", err)
+		}
 	}
 
-	// Collect events
-	fmt.Println("Collecting activity data...")
-	events, err := coll.CollectOrganizationData(ctx, org, timeRange.Start, timeRange.End, func(repo string, progress float64) {
-		fmt.Printf("\rProgress: %.1f%% (%s)", progress*100, repo)
-	})
-	if err != nil {
-		return fmt.Errorf("failed to collect data: %w", err)
-	}
 	fmt.Printf("\nCollected %d events\n", len(events))
 
 	// Save events

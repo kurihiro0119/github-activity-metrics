@@ -26,6 +26,12 @@ type Collector interface {
 
 	// CollectOrganizationData collects all data for an organization
 	CollectOrganizationData(ctx context.Context, org string, since, until time.Time, onProgress func(repo string, progress float64)) ([]*domain.Event, error)
+
+	// GetUserRepositories retrieves all repositories for a user
+	GetUserRepositories(ctx context.Context, user string) ([]*domain.Repository, error)
+
+	// CollectUserData collects all data for a user account
+	CollectUserData(ctx context.Context, user string, since, until time.Time, onProgress func(repo string, progress float64)) ([]*domain.Event, error)
 }
 
 // ProgressCallback is a callback function for reporting progress

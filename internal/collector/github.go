@@ -60,6 +60,7 @@ func (c *githubCollector) GetRepositories(ctx context.Context, org string) ([]*d
 				Name:      repo.GetName(),
 				FullName:  repo.GetFullName(),
 				IsPrivate: repo.GetPrivate(),
+				OwnerType: "organization",
 				CreatedAt: now,
 				UpdatedAt: now,
 			})
@@ -135,6 +136,7 @@ func (c *githubCollector) GetCommits(ctx context.Context, org, repo string, sinc
 				Org:          org,
 				Repo:         repo,
 				Member:       author,
+				OwnerType:    "organization",
 				Timestamp:    commit.Commit.Author.GetDate().Time,
 				Sha:          commit.GetSHA(),
 				Message:      commit.Commit.GetMessage(),
@@ -207,6 +209,7 @@ func (c *githubCollector) GetPullRequests(ctx context.Context, org, repo string,
 				Org:       org,
 				Repo:      repo,
 				Member:    pr.User.GetLogin(),
+				OwnerType: "organization",
 				Timestamp: createdAt,
 				Number:    pr.GetNumber(),
 				State:     state,
@@ -285,6 +288,7 @@ func (c *githubCollector) GetDeploys(ctx context.Context, org, repo string, sinc
 				Org:           org,
 				Repo:          repo,
 				Member:        creator,
+				OwnerType:     "organization",
 				Timestamp:     createdAt,
 				Environment:   deployment.GetEnvironment(),
 				Status:        status,
@@ -332,6 +336,7 @@ func (c *githubCollector) GetMembers(ctx context.Context, org string) ([]*domain
 				Org:         org,
 				Username:    member.GetLogin(),
 				DisplayName: member.GetName(),
+				OwnerType:   "organization",
 				CreatedAt:   now,
 				UpdatedAt:   now,
 			})
@@ -427,6 +432,142 @@ func (c *githubCollector) CollectOrganizationData(ctx context.Context, org strin
 	for err := range errCh {
 		if err != nil {
 			// Log error but continue with other repos (EDGE-001)
+			fmt.Printf("Warning: %v\n", err)
+		}
+	}
+
+	return allEvents, nil
+}
+
+// GetUserRepositories retrieves all repositories for a user
+func (c *githubCollector) GetUserRepositories(ctx context.Context, user string) ([]*domain.Repository, error) {
+	if err := c.rateLimiter.Wait(ctx); err != nil {
+		return nil, err
+	}
+
+	var allRepos []*domain.Repository
+	opts := &github.RepositoryListOptions{
+		Type:        "all", // all, owner, member
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+
+	for {
+		repos, resp, err := c.client.Repositories.List(ctx, user, opts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list repositories for user %s: %w", user, err)
+		}
+
+		c.updateRateLimitFromResponse(resp)
+
+		for _, repo := range repos {
+			now := time.Now()
+			allRepos = append(allRepos, &domain.Repository{
+				Org:       user, // Use user as org for consistency
+				Name:      repo.GetName(),
+				FullName:  repo.GetFullName(),
+				IsPrivate: repo.GetPrivate(),
+				OwnerType: "user",
+				CreatedAt: now,
+				UpdatedAt: now,
+			})
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+
+		if err := c.rateLimiter.Wait(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	return allRepos, nil
+}
+
+// CollectUserData collects all data for a user account
+func (c *githubCollector) CollectUserData(ctx context.Context, user string, since, until time.Time, onProgress func(repo string, progress float64)) ([]*domain.Event, error) {
+	// Get all repositories
+	repos, err := c.GetUserRepositories(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+
+	var allEvents []*domain.Event
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(repos))
+
+	// Limit concurrent goroutines
+	semaphore := make(chan struct{}, 5)
+
+	for i, repo := range repos {
+		wg.Add(1)
+		go func(r *domain.Repository, index int) {
+			defer wg.Done()
+
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			// Collect commits
+			commits, err := c.GetCommits(ctx, user, r.Name, since, until)
+			if err != nil {
+				errCh <- fmt.Errorf("failed to get commits for %s: %w", r.Name, err)
+				return
+			}
+
+			mu.Lock()
+			for _, commit := range commits {
+				event := commit.ToEvent()
+				event.OwnerType = "user"
+				allEvents = append(allEvents, event)
+			}
+			mu.Unlock()
+
+			// Collect pull requests
+			prs, err := c.GetPullRequests(ctx, user, r.Name, since, until)
+			if err != nil {
+				errCh <- fmt.Errorf("failed to get pull requests for %s: %w", r.Name, err)
+				return
+			}
+
+			mu.Lock()
+			for _, pr := range prs {
+				event := pr.ToEvent()
+				event.OwnerType = "user"
+				allEvents = append(allEvents, event)
+			}
+			mu.Unlock()
+
+			// Collect deployments
+			deploys, err := c.GetDeploys(ctx, user, r.Name, since, until)
+			if err != nil {
+				errCh <- fmt.Errorf("failed to get deployments for %s: %w", r.Name, err)
+				return
+			}
+
+			mu.Lock()
+			for _, deploy := range deploys {
+				event := deploy.ToEvent()
+				event.OwnerType = "user"
+				allEvents = append(allEvents, event)
+			}
+			mu.Unlock()
+
+			// Report progress
+			if onProgress != nil {
+				onProgress(r.Name, float64(index+1)/float64(len(repos)))
+			}
+		}(repo, i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	// Check for errors
+	for err := range errCh {
+		if err != nil {
+			// Log error but continue with other repos
 			fmt.Printf("Warning: %v\n", err)
 		}
 	}

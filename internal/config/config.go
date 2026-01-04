@@ -10,6 +10,7 @@ import (
 type Config struct {
 	// GitHub
 	GitHubToken string
+	Mode        string // "organization" or "user"
 
 	// Storage
 	StorageType string // "sqlite" or "postgres"
@@ -31,6 +32,7 @@ func Load() (*Config, error) {
 
 	return &Config{
 		GitHubToken: getEnv("GITHUB_TOKEN", ""),
+		Mode:        getEnv("MODE", "organization"), // "organization" or "user"
 		StorageType: getEnv("STORAGE_TYPE", "sqlite"),
 		SQLitePath:  getEnv("SQLITE_PATH", "./metrics.db"),
 		PostgresURL: getEnv("POSTGRES_URL", ""),
@@ -52,6 +54,9 @@ func getEnv(key, defaultValue string) string {
 func (c *Config) Validate() error {
 	if c.GitHubToken == "" {
 		return &ConfigError{Field: "GITHUB_TOKEN", Message: "GitHub token is required"}
+	}
+	if c.Mode != "organization" && c.Mode != "user" {
+		return &ConfigError{Field: "MODE", Message: "must be 'organization' or 'user'"}
 	}
 	if c.StorageType != "sqlite" && c.StorageType != "postgres" {
 		return &ConfigError{Field: "STORAGE_TYPE", Message: "must be 'sqlite' or 'postgres'"}

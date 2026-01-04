@@ -140,6 +140,92 @@ func (h *Handler) GetTimeSeriesMetrics(c *gin.Context) {
 	})
 }
 
+// GetUserMetrics returns user-level metrics (same as org metrics)
+// GET /api/v1/users/:user/metrics
+func (h *Handler) GetUserMetrics(c *gin.Context) {
+	user := c.Param("user")
+	timeRange := parseTimeRange(c)
+
+	// Use org metrics aggregator (user is stored as org in the database)
+	metrics, err := h.aggregator.AggregateOrgMetrics(c.Request.Context(), user, timeRange)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": metrics,
+	})
+}
+
+// GetUserTimeSeriesMetrics returns time series metrics for a user
+// GET /api/v1/users/:user/metrics/timeseries
+func (h *Handler) GetUserTimeSeriesMetrics(c *gin.Context) {
+	user := c.Param("user")
+	metricTypeStr := c.DefaultQuery("type", "commit")
+	timeRange := parseTimeRange(c)
+
+	var metricType domain.MetricType
+	switch metricTypeStr {
+	case "commit":
+		metricType = domain.MetricTypeCommit
+	case "pull_request":
+		metricType = domain.MetricTypePullRequest
+	case "deploy":
+		metricType = domain.MetricTypeDeploy
+	default:
+		metricType = domain.MetricTypeCommit
+	}
+
+	// Use org time series aggregator (user is stored as org in the database)
+	metrics, err := h.aggregator.GetTimeSeriesMetrics(c.Request.Context(), user, metricType, timeRange)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": metrics,
+	})
+}
+
+// GetUserReposMetrics returns metrics for all repositories of a user
+// GET /api/v1/users/:user/repos/metrics
+func (h *Handler) GetUserReposMetrics(c *gin.Context) {
+	user := c.Param("user")
+	timeRange := parseTimeRange(c)
+
+	// Use org repos metrics aggregator (user is stored as org in the database)
+	metrics, err := h.aggregator.GetReposMetrics(c.Request.Context(), user, timeRange)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": metrics,
+	})
+}
+
+// GetUserRepoMetrics returns repository-level metrics for a user
+// GET /api/v1/users/:user/repos/:repo/metrics
+func (h *Handler) GetUserRepoMetrics(c *gin.Context) {
+	user := c.Param("user")
+	repo := c.Param("repo")
+	timeRange := parseTimeRange(c)
+
+	// Use org repo metrics aggregator (user is stored as org in the database)
+	metrics, err := h.aggregator.AggregateRepoMetrics(c.Request.Context(), user, repo, timeRange)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": metrics,
+	})
+}
+
 // HealthCheck returns the health status of the API
 // GET /health
 func (h *Handler) HealthCheck(c *gin.Context) {

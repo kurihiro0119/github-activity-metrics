@@ -19,6 +19,7 @@ func SetupRoutes(handler *Handler) *gin.Engine {
 	// API v1
 	v1 := router.Group("/api/v1")
 	{
+		// Organization endpoints
 		orgs := v1.Group("/orgs/:org")
 		{
 			// Organization metrics
@@ -37,6 +38,21 @@ func SetupRoutes(handler *Handler) *gin.Engine {
 			{
 				repos.GET("/metrics", handler.GetReposMetrics)
 				repos.GET("/:repo/metrics", handler.GetRepoMetrics)
+			}
+		}
+
+		// User endpoints
+		users := v1.Group("/users/:user")
+		{
+			// User metrics (same as org metrics, but for user account)
+			users.GET("/metrics", handler.GetUserMetrics)
+			users.GET("/metrics/timeseries", handler.GetUserTimeSeriesMetrics)
+
+			// Repositories metrics
+			repos := users.Group("/repos")
+			{
+				repos.GET("/metrics", handler.GetUserReposMetrics)
+				repos.GET("/:repo/metrics", handler.GetUserRepoMetrics)
 			}
 		}
 	}
