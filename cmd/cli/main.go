@@ -160,8 +160,34 @@ func runCollect(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	timeRange := getTimeRange()
 
+	// Create or get batch
+	batch := &domain.CollectionBatch{
+		Mode:      cfg.Mode,
+		Owner:     target,
+		StartDate: timeRange.Start,
+		EndDate:   timeRange.End,
+		Status:    "in_progress",
+	}
+	batch, err = store.CreateOrGetBatch(ctx, batch)
+	if err != nil {
+		return fmt.Errorf("failed to create/get batch: %w", err)
+	}
+	fmt.Printf("Batch ID: %s\n", batch.ID)
+	if batch.Status == "completed" {
+		fmt.Printf("Note: This batch was previously completed. Re-running to check for new data.\n")
+	}
+
+	// Get completed repositories for this batch
+	completedRepos, err := store.GetCompletedReposForBatch(ctx, batch.ID)
+	if err != nil {
+		return fmt.Errorf("failed to get completed repos: %w", err)
+	}
+	if len(completedRepos) > 0 {
+		fmt.Printf("Found %d already completed repositories (will be skipped)\n", len(completedRepos))
+	}
+
 	var repos []*domain.Repository
-	var events []*domain.Event
+	var totalEvents int
 
 	if cfg.Mode == "user" {
 		fmt.Printf("Collecting data for user: %s\n", target)
@@ -196,12 +222,43 @@ func runCollect(cmd *cobra.Command, args []string) error {
 			fmt.Printf("Warning: failed to save member %s: %v\n", member.Username, err)
 		}
 
-		// Collect events
+		// Collect events and save incrementally per repository
 		fmt.Println("Collecting activity data...")
-		events, err = coll.CollectUserData(ctx, target, timeRange.Start, timeRange.End, func(repo string, progress float64) {
-			fmt.Printf("\rProgress: %.1f%% (%s)", progress*100, repo)
-		})
+		err = coll.CollectUserDataWithCallback(ctx, target, timeRange.Start, timeRange.End,
+			func(repo string, progress float64) {
+				fmt.Printf("\rProgress: %.1f%% (%s)", progress*100, repo)
+			},
+			func(repo string, events []*domain.Event) error {
+				// Skip if already completed
+				if completedRepos[repo] {
+					fmt.Printf("\n  Skipping %s (already completed)\n", repo)
+					return nil
+				}
+
+				// Mark as processing
+				if err := store.UpdateBatchRepositoryStatus(ctx, batch.ID, target, repo, "processing", 0, nil); err != nil {
+					fmt.Printf("Warning: failed to update batch repo status for %s: %v\n", repo, err)
+				}
+
+				// Save events for this repository
+				if len(events) > 0 {
+					if err := store.SaveRawEvents(ctx, events); err != nil {
+						store.UpdateBatchRepositoryStatus(ctx, batch.ID, target, repo, "failed", 0, err)
+						return fmt.Errorf("failed to save events for %s: %w", repo, err)
+					}
+					totalEvents += len(events)
+					fmt.Printf("\n  Saved %d events for %s\n", len(events), repo)
+				}
+
+				// Mark as completed
+				if err := store.UpdateBatchRepositoryStatus(ctx, batch.ID, target, repo, "completed", len(events), nil); err != nil {
+					fmt.Printf("Warning: failed to update batch repo status for %s: %v\n", repo, err)
+				}
+
+				return nil
+			})
 		if err != nil {
+			store.UpdateBatchStatus(ctx, batch.ID, "failed")
 			return fmt.Errorf("failed to collect data: %w", err)
 		}
 	} else {
@@ -212,7 +269,7 @@ func runCollect(cmd *cobra.Command, args []string) error {
 		fmt.Println("Fetching repositories...")
 		repos, err = coll.GetRepositories(ctx, target)
 		if err != nil {
-			return fmt.Errorf("failed to get repositories: %w", err)
+			return fmt.Errorf("failed to get repositories: %w\nHint: Check if the organization name is correct and your token has 'read:org' permission", err)
 		}
 		fmt.Printf("Found %d repositories\n", len(repos))
 
@@ -237,23 +294,53 @@ func runCollect(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Collect events
+		// Collect events and save incrementally per repository
 		fmt.Println("Collecting activity data...")
-		events, err = coll.CollectOrganizationData(ctx, target, timeRange.Start, timeRange.End, func(repo string, progress float64) {
-			fmt.Printf("\rProgress: %.1f%% (%s)", progress*100, repo)
-		})
+		err = coll.CollectOrganizationDataWithCallback(ctx, target, timeRange.Start, timeRange.End,
+			func(repo string, progress float64) {
+				fmt.Printf("\rProgress: %.1f%% (%s)", progress*100, repo)
+			},
+			func(repo string, events []*domain.Event) error {
+				// Skip if already completed
+				if completedRepos[repo] {
+					fmt.Printf("\n  Skipping %s (already completed)\n", repo)
+					return nil
+				}
+
+				// Mark as processing
+				if err := store.UpdateBatchRepositoryStatus(ctx, batch.ID, target, repo, "processing", 0, nil); err != nil {
+					fmt.Printf("Warning: failed to update batch repo status for %s: %v\n", repo, err)
+				}
+
+				// Save events for this repository
+				if len(events) > 0 {
+					if err := store.SaveRawEvents(ctx, events); err != nil {
+						store.UpdateBatchRepositoryStatus(ctx, batch.ID, target, repo, "failed", 0, err)
+						return fmt.Errorf("failed to save events for %s: %w", repo, err)
+					}
+					totalEvents += len(events)
+					fmt.Printf("\n  Saved %d events for %s\n", len(events), repo)
+				}
+
+				// Mark as completed
+				if err := store.UpdateBatchRepositoryStatus(ctx, batch.ID, target, repo, "completed", len(events), nil); err != nil {
+					fmt.Printf("Warning: failed to update batch repo status for %s: %v\n", repo, err)
+				}
+
+				return nil
+			})
 		if err != nil {
+			store.UpdateBatchStatus(ctx, batch.ID, "failed")
 			return fmt.Errorf("failed to collect data: %w", err)
 		}
 	}
 
-	fmt.Printf("\nCollected %d events\n", len(events))
-
-	// Save events
-	fmt.Println("Saving events...")
-	if err := store.SaveRawEvents(ctx, events); err != nil {
-		return fmt.Errorf("failed to save events: %w", err)
+	// Update batch status to completed
+	if err := store.UpdateBatchStatus(ctx, batch.ID, "completed"); err != nil {
+		fmt.Printf("Warning: failed to update batch status: %v\n", err)
 	}
+
+	fmt.Printf("\nCollected %d events total\n", totalEvents)
 
 	fmt.Println("Data collection complete!")
 	return nil

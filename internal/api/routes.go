@@ -25,12 +25,14 @@ func SetupRoutes(handler *Handler) *gin.Engine {
 			// Organization metrics
 			orgs.GET("/metrics", handler.GetOrgMetrics)
 			orgs.GET("/metrics/timeseries", handler.GetTimeSeriesMetrics)
+			orgs.GET("/metrics/timeseries/detailed", handler.GetOrgTimeSeriesDetailed)
 
 			// Members metrics
 			members := orgs.Group("/members")
 			{
 				members.GET("/metrics", handler.GetMembersMetrics)
 				members.GET("/:member/metrics", handler.GetMemberMetrics)
+				members.GET("/:member/metrics/timeseries", handler.GetMemberTimeSeriesDetailed)
 			}
 
 			// Repositories metrics
@@ -38,6 +40,8 @@ func SetupRoutes(handler *Handler) *gin.Engine {
 			{
 				repos.GET("/metrics", handler.GetReposMetrics)
 				repos.GET("/:repo/metrics", handler.GetRepoMetrics)
+				repos.GET("/:repo/metrics/timeseries", handler.GetRepoTimeSeriesDetailed)
+				repos.GET("/:repo/members/metrics", handler.GetRepoMembersMetrics)
 			}
 
 			// Rankings
@@ -54,12 +58,15 @@ func SetupRoutes(handler *Handler) *gin.Engine {
 			// User metrics (same as org metrics, but for user account)
 			users.GET("/metrics", handler.GetUserMetrics)
 			users.GET("/metrics/timeseries", handler.GetUserTimeSeriesMetrics)
+			users.GET("/metrics/timeseries/detailed", handler.GetUserTimeSeriesDetailed)
 
 			// Repositories metrics
 			repos := users.Group("/repos")
 			{
 				repos.GET("/metrics", handler.GetUserReposMetrics)
 				repos.GET("/:repo/metrics", handler.GetUserRepoMetrics)
+				repos.GET("/:repo/metrics/timeseries", handler.GetUserRepoTimeSeriesDetailed)
+				repos.GET("/:repo/members/metrics", handler.GetUserRepoMembersMetrics)
 			}
 
 			// Rankings

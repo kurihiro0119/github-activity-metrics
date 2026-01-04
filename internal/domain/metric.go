@@ -81,6 +81,22 @@ type TimeSeriesData struct {
 	DataPoints  []TimeSeriesMetric
 }
 
+// DetailedTimeSeriesMetric represents a detailed data point with all metrics
+type DetailedTimeSeriesMetric struct {
+	Timestamp time.Time
+	Commits   int64
+	PRs       int64
+	Additions int64
+	Deletions int64
+	Deploys   int64
+}
+
+// DetailedTimeSeriesData represents detailed time series data with all metrics
+type DetailedTimeSeriesData struct {
+	Granularity string
+	DataPoints  []DetailedTimeSeriesMetric
+}
+
 // RankingType represents the type of ranking
 type RankingType string
 
