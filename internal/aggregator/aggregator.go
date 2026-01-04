@@ -27,6 +27,12 @@ type Aggregator interface {
 
 	// GetTimeSeriesMetrics retrieves time series metrics
 	GetTimeSeriesMetrics(ctx context.Context, org string, metricType domain.MetricType, timeRange domain.TimeRange) (*domain.TimeSeriesData, error)
+
+	// GetMemberRanking retrieves member rankings
+	GetMemberRanking(ctx context.Context, org string, rankingType domain.RankingType, timeRange domain.TimeRange, limit int) ([]*domain.MemberRanking, error)
+
+	// GetRepoRanking retrieves repository rankings
+	GetRepoRanking(ctx context.Context, org string, rankingType domain.RankingType, timeRange domain.TimeRange, limit int) ([]*domain.RepoRanking, error)
 }
 
 // aggregator implements the Aggregator interface
@@ -110,6 +116,16 @@ func (a *aggregator) GetTimeSeriesMetrics(ctx context.Context, org string, metri
 		Granularity: timeRange.Granularity,
 		DataPoints:  dataPoints,
 	}, nil
+}
+
+// GetMemberRanking retrieves member rankings
+func (a *aggregator) GetMemberRanking(ctx context.Context, org string, rankingType domain.RankingType, timeRange domain.TimeRange, limit int) ([]*domain.MemberRanking, error) {
+	return a.storage.GetMemberRanking(ctx, org, rankingType, timeRange, limit)
+}
+
+// GetRepoRanking retrieves repository rankings
+func (a *aggregator) GetRepoRanking(ctx context.Context, org string, rankingType domain.RankingType, timeRange domain.TimeRange, limit int) ([]*domain.RepoRanking, error) {
+	return a.storage.GetRepoRanking(ctx, org, rankingType, timeRange, limit)
 }
 
 // truncateTime truncates a time to the start of the period based on granularity

@@ -39,6 +39,13 @@ func SetupRoutes(handler *Handler) *gin.Engine {
 				repos.GET("/metrics", handler.GetReposMetrics)
 				repos.GET("/:repo/metrics", handler.GetRepoMetrics)
 			}
+
+			// Rankings
+			rankings := orgs.Group("/rankings")
+			{
+				rankings.GET("/members/:type", handler.GetMemberRanking)
+				rankings.GET("/repos/:type", handler.GetRepoRanking)
+			}
 		}
 
 		// User endpoints
@@ -53,6 +60,13 @@ func SetupRoutes(handler *Handler) *gin.Engine {
 			{
 				repos.GET("/metrics", handler.GetUserReposMetrics)
 				repos.GET("/:repo/metrics", handler.GetUserRepoMetrics)
+			}
+
+			// Rankings
+			rankings := users.Group("/rankings")
+			{
+				rankings.GET("/members/:type", handler.GetUserMemberRanking)
+				rankings.GET("/repos/:type", handler.GetUserRepoRanking)
 			}
 		}
 	}

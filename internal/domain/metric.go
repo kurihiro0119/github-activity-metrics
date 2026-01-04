@@ -80,3 +80,35 @@ type TimeSeriesData struct {
 	Granularity string
 	DataPoints  []TimeSeriesMetric
 }
+
+// RankingType represents the type of ranking
+type RankingType string
+
+const (
+	RankingTypeCommits     RankingType = "commits"
+	RankingTypePRs         RankingType = "prs"
+	RankingTypeCodeChanges RankingType = "code-changes"
+	RankingTypeDeploys     RankingType = "deploys"
+)
+
+// MemberRanking represents a member ranking entry
+type MemberRanking struct {
+	Rank      int    // 1-based rank
+	Member    string
+	Value     int64
+	Commits   int64
+	PRs       int64
+	Additions int64
+	Deletions int64
+	Deploys   int64
+}
+
+// RepoRanking represents a repository ranking entry
+type RepoRanking struct {
+	Rank    int    // 1-based rank
+	Repo    string
+	Value   int64
+	Commits int64
+	PRs     int64
+	Deploys int64
+}

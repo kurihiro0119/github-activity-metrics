@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -224,6 +225,175 @@ func (h *Handler) GetUserRepoMetrics(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"data": metrics,
 	})
+}
+
+// GetMemberRanking returns member rankings
+// GET /api/v1/orgs/:org/rankings/members/:type
+func (h *Handler) GetMemberRanking(c *gin.Context) {
+	org := c.Param("org")
+	rankingTypeStr := c.Param("type")
+	timeRange := parseTimeRange(c)
+	limit := parseIntQuery(c, "limit", 10)
+
+	var rankingType domain.RankingType
+	switch rankingTypeStr {
+	case "commits":
+		rankingType = domain.RankingTypeCommits
+	case "prs":
+		rankingType = domain.RankingTypePRs
+	case "code-changes":
+		rankingType = domain.RankingTypeCodeChanges
+	case "deploys":
+		rankingType = domain.RankingTypeDeploys
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"code":    "INVALID_RANKING_TYPE",
+				"message": "ranking type must be one of: commits, prs, code-changes, deploys",
+			},
+		})
+		return
+	}
+
+	rankings, err := h.aggregator.GetMemberRanking(c.Request.Context(), org, rankingType, timeRange, limit)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": rankings,
+	})
+}
+
+// GetRepoRanking returns repository rankings
+// GET /api/v1/orgs/:org/rankings/repos/:type
+func (h *Handler) GetRepoRanking(c *gin.Context) {
+	org := c.Param("org")
+	rankingTypeStr := c.Param("type")
+	timeRange := parseTimeRange(c)
+	limit := parseIntQuery(c, "limit", 10)
+
+	var rankingType domain.RankingType
+	switch rankingTypeStr {
+	case "commits":
+		rankingType = domain.RankingTypeCommits
+	case "prs":
+		rankingType = domain.RankingTypePRs
+	case "code-changes":
+		rankingType = domain.RankingTypeCodeChanges
+	case "deploys":
+		rankingType = domain.RankingTypeDeploys
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"code":    "INVALID_RANKING_TYPE",
+				"message": "ranking type must be one of: commits, prs, code-changes, deploys",
+			},
+		})
+		return
+	}
+
+	rankings, err := h.aggregator.GetRepoRanking(c.Request.Context(), org, rankingType, timeRange, limit)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": rankings,
+	})
+}
+
+// GetUserMemberRanking returns member rankings for a user account
+// GET /api/v1/users/:user/rankings/members/:type
+func (h *Handler) GetUserMemberRanking(c *gin.Context) {
+	user := c.Param("user")
+	rankingTypeStr := c.Param("type")
+	timeRange := parseTimeRange(c)
+	limit := parseIntQuery(c, "limit", 10)
+
+	var rankingType domain.RankingType
+	switch rankingTypeStr {
+	case "commits":
+		rankingType = domain.RankingTypeCommits
+	case "prs":
+		rankingType = domain.RankingTypePRs
+	case "code-changes":
+		rankingType = domain.RankingTypeCodeChanges
+	case "deploys":
+		rankingType = domain.RankingTypeDeploys
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"code":    "INVALID_RANKING_TYPE",
+				"message": "ranking type must be one of: commits, prs, code-changes, deploys",
+			},
+		})
+		return
+	}
+
+	rankings, err := h.aggregator.GetMemberRanking(c.Request.Context(), user, rankingType, timeRange, limit)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": rankings,
+	})
+}
+
+// GetUserRepoRanking returns repository rankings for a user account
+// GET /api/v1/users/:user/rankings/repos/:type
+func (h *Handler) GetUserRepoRanking(c *gin.Context) {
+	user := c.Param("user")
+	rankingTypeStr := c.Param("type")
+	timeRange := parseTimeRange(c)
+	limit := parseIntQuery(c, "limit", 10)
+
+	var rankingType domain.RankingType
+	switch rankingTypeStr {
+	case "commits":
+		rankingType = domain.RankingTypeCommits
+	case "prs":
+		rankingType = domain.RankingTypePRs
+	case "code-changes":
+		rankingType = domain.RankingTypeCodeChanges
+	case "deploys":
+		rankingType = domain.RankingTypeDeploys
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"code":    "INVALID_RANKING_TYPE",
+				"message": "ranking type must be one of: commits, prs, code-changes, deploys",
+			},
+		})
+		return
+	}
+
+	rankings, err := h.aggregator.GetRepoRanking(c.Request.Context(), user, rankingType, timeRange, limit)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": rankings,
+	})
+}
+
+// parseIntQuery parses an integer query parameter with a default value
+func parseIntQuery(c *gin.Context, key string, defaultValue int) int {
+	valueStr := c.Query(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.Atoi(valueStr)
+	if err != nil || value <= 0 {
+		return defaultValue
+	}
+	return value
 }
 
 // HealthCheck returns the health status of the API

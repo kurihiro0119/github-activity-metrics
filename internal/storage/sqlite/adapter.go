@@ -768,6 +768,220 @@ func (s *sqliteStorage) GetReposWithMetrics(ctx context.Context, org string, tim
 	return metrics, nil
 }
 
+// GetMemberRanking retrieves member rankings
+func (s *sqliteStorage) GetMemberRanking(ctx context.Context, org string, rankingType domain.RankingType, timeRange domain.TimeRange, limit int) ([]*domain.MemberRanking, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	var query string
+	switch rankingType {
+	case domain.RankingTypeCommits:
+		query = `
+			SELECT member,
+				SUM(CASE WHEN type = 'commit' THEN 1 ELSE 0 END) as commits,
+				SUM(CASE WHEN type = 'commit' THEN 1 ELSE 0 END) as commit_count,
+				SUM(CASE WHEN type = 'pull_request' THEN 1 ELSE 0 END) as pr_count,
+				SUM(CASE WHEN type = 'commit' THEN CAST(json_extract(data, '$.additions') AS INTEGER) ELSE 0 END) as additions,
+				SUM(CASE WHEN type = 'commit' THEN CAST(json_extract(data, '$.deletions') AS INTEGER) ELSE 0 END) as deletions,
+				SUM(CASE WHEN type = 'deploy' THEN 1 ELSE 0 END) as deploy_count
+			FROM events
+			WHERE owner = ? AND timestamp >= ? AND timestamp <= ?
+			GROUP BY member
+			ORDER BY commits DESC
+			LIMIT ?
+		`
+	case domain.RankingTypePRs:
+		query = `
+			SELECT member,
+				SUM(CASE WHEN type = 'pull_request' THEN 1 ELSE 0 END) as prs,
+				SUM(CASE WHEN type = 'commit' THEN 1 ELSE 0 END) as commit_count,
+				SUM(CASE WHEN type = 'pull_request' THEN 1 ELSE 0 END) as pr_count,
+				SUM(CASE WHEN type = 'commit' THEN CAST(json_extract(data, '$.additions') AS INTEGER) ELSE 0 END) as additions,
+				SUM(CASE WHEN type = 'commit' THEN CAST(json_extract(data, '$.deletions') AS INTEGER) ELSE 0 END) as deletions,
+				SUM(CASE WHEN type = 'deploy' THEN 1 ELSE 0 END) as deploy_count
+			FROM events
+			WHERE owner = ? AND timestamp >= ? AND timestamp <= ?
+			GROUP BY member
+			ORDER BY prs DESC
+			LIMIT ?
+		`
+	case domain.RankingTypeCodeChanges:
+		query = `
+			SELECT member,
+				SUM(CASE WHEN type = 'commit' THEN CAST(json_extract(data, '$.additions') AS INTEGER) + CAST(json_extract(data, '$.deletions') AS INTEGER) ELSE 0 END) as code_changes,
+				SUM(CASE WHEN type = 'commit' THEN 1 ELSE 0 END) as commit_count,
+				SUM(CASE WHEN type = 'pull_request' THEN 1 ELSE 0 END) as pr_count,
+				SUM(CASE WHEN type = 'commit' THEN CAST(json_extract(data, '$.additions') AS INTEGER) ELSE 0 END) as additions,
+				SUM(CASE WHEN type = 'commit' THEN CAST(json_extract(data, '$.deletions') AS INTEGER) ELSE 0 END) as deletions,
+				SUM(CASE WHEN type = 'deploy' THEN 1 ELSE 0 END) as deploy_count
+			FROM events
+			WHERE owner = ? AND timestamp >= ? AND timestamp <= ?
+			GROUP BY member
+			ORDER BY code_changes DESC
+			LIMIT ?
+		`
+	case domain.RankingTypeDeploys:
+		query = `
+			SELECT member,
+				SUM(CASE WHEN type = 'deploy' THEN 1 ELSE 0 END) as deploys,
+				SUM(CASE WHEN type = 'commit' THEN 1 ELSE 0 END) as commit_count,
+				SUM(CASE WHEN type = 'pull_request' THEN 1 ELSE 0 END) as pr_count,
+				SUM(CASE WHEN type = 'commit' THEN CAST(json_extract(data, '$.additions') AS INTEGER) ELSE 0 END) as additions,
+				SUM(CASE WHEN type = 'commit' THEN CAST(json_extract(data, '$.deletions') AS INTEGER) ELSE 0 END) as deletions,
+				SUM(CASE WHEN type = 'deploy' THEN 1 ELSE 0 END) as deploy_count
+			FROM events
+			WHERE owner = ? AND timestamp >= ? AND timestamp <= ?
+			GROUP BY member
+			ORDER BY deploys DESC
+			LIMIT ?
+		`
+	default:
+		return nil, fmt.Errorf("unknown ranking type: %s", rankingType)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, org, timeRange.Start, timeRange.End, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rankings []*domain.MemberRanking
+	rank := 1
+	for rows.Next() {
+		var r domain.MemberRanking
+		var commitCount, prCount, deployCount sql.NullInt64
+		var additions, deletions sql.NullInt64
+
+		err := rows.Scan(&r.Member, &r.Value, &commitCount, &prCount, &additions, &deletions, &deployCount)
+		if err != nil {
+			return nil, err
+		}
+
+		r.Rank = rank
+		if commitCount.Valid {
+			r.Commits = commitCount.Int64
+		}
+		if prCount.Valid {
+			r.PRs = prCount.Int64
+		}
+		if additions.Valid {
+			r.Additions = additions.Int64
+		}
+		if deletions.Valid {
+			r.Deletions = deletions.Int64
+		}
+		if deployCount.Valid {
+			r.Deploys = deployCount.Int64
+		}
+
+		rankings = append(rankings, &r)
+		rank++
+	}
+
+	return rankings, nil
+}
+
+// GetRepoRanking retrieves repository rankings
+func (s *sqliteStorage) GetRepoRanking(ctx context.Context, org string, rankingType domain.RankingType, timeRange domain.TimeRange, limit int) ([]*domain.RepoRanking, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	var query string
+	switch rankingType {
+	case domain.RankingTypeCommits:
+		query = `
+			SELECT repo,
+				SUM(CASE WHEN type = 'commit' THEN 1 ELSE 0 END) as commits,
+				SUM(CASE WHEN type = 'commit' THEN 1 ELSE 0 END) as commit_count,
+				SUM(CASE WHEN type = 'pull_request' THEN 1 ELSE 0 END) as pr_count,
+				SUM(CASE WHEN type = 'deploy' THEN 1 ELSE 0 END) as deploy_count
+			FROM events
+			WHERE owner = ? AND timestamp >= ? AND timestamp <= ?
+			GROUP BY repo
+			ORDER BY commits DESC
+			LIMIT ?
+		`
+	case domain.RankingTypePRs:
+		query = `
+			SELECT repo,
+				SUM(CASE WHEN type = 'pull_request' THEN 1 ELSE 0 END) as prs,
+				SUM(CASE WHEN type = 'commit' THEN 1 ELSE 0 END) as commit_count,
+				SUM(CASE WHEN type = 'pull_request' THEN 1 ELSE 0 END) as pr_count,
+				SUM(CASE WHEN type = 'deploy' THEN 1 ELSE 0 END) as deploy_count
+			FROM events
+			WHERE owner = ? AND timestamp >= ? AND timestamp <= ?
+			GROUP BY repo
+			ORDER BY prs DESC
+			LIMIT ?
+		`
+	case domain.RankingTypeDeploys:
+		query = `
+			SELECT repo,
+				SUM(CASE WHEN type = 'deploy' THEN 1 ELSE 0 END) as deploys,
+				SUM(CASE WHEN type = 'commit' THEN 1 ELSE 0 END) as commit_count,
+				SUM(CASE WHEN type = 'pull_request' THEN 1 ELSE 0 END) as pr_count,
+				SUM(CASE WHEN type = 'deploy' THEN 1 ELSE 0 END) as deploy_count
+			FROM events
+			WHERE owner = ? AND timestamp >= ? AND timestamp <= ?
+			GROUP BY repo
+			ORDER BY deploys DESC
+			LIMIT ?
+		`
+	case domain.RankingTypeCodeChanges:
+		// Code changes ranking for repos (sum of additions + deletions)
+		query = `
+			SELECT repo,
+				SUM(CASE WHEN type = 'commit' THEN CAST(json_extract(data, '$.additions') AS INTEGER) + CAST(json_extract(data, '$.deletions') AS INTEGER) ELSE 0 END) as code_changes,
+				SUM(CASE WHEN type = 'commit' THEN 1 ELSE 0 END) as commit_count,
+				SUM(CASE WHEN type = 'pull_request' THEN 1 ELSE 0 END) as pr_count,
+				SUM(CASE WHEN type = 'deploy' THEN 1 ELSE 0 END) as deploy_count
+			FROM events
+			WHERE owner = ? AND timestamp >= ? AND timestamp <= ?
+			GROUP BY repo
+			ORDER BY code_changes DESC
+			LIMIT ?
+		`
+	default:
+		return nil, fmt.Errorf("unknown ranking type: %s", rankingType)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, org, timeRange.Start, timeRange.End, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rankings []*domain.RepoRanking
+	rank := 1
+	for rows.Next() {
+		var r domain.RepoRanking
+		var commitCount, prCount, deployCount sql.NullInt64
+
+		err := rows.Scan(&r.Repo, &r.Value, &commitCount, &prCount, &deployCount)
+		if err != nil {
+			return nil, err
+		}
+
+		r.Rank = rank
+		if commitCount.Valid {
+			r.Commits = commitCount.Int64
+		}
+		if prCount.Valid {
+			r.PRs = prCount.Int64
+		}
+		if deployCount.Valid {
+			r.Deploys = deployCount.Int64
+		}
+
+		rankings = append(rankings, &r)
+		rank++
+	}
+
+	return rankings, nil
+}
+
 // Close closes the database connection
 func (s *sqliteStorage) Close() error {
 	return s.db.Close()

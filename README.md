@@ -40,16 +40,16 @@ cp .env.example .env
 
 ### 環境変数
 
-| 変数名 | 説明 | デフォルト値 |
-|--------|------|-------------|
-| `GITHUB_TOKEN` | GitHub Personal Access Token | (必須) |
-| `MODE` | モード (`organization` または `user`) | `organization` |
-| `STORAGE_TYPE` | ストレージタイプ (`sqlite` または `postgres`) | `sqlite` |
-| `SQLITE_PATH` | SQLite データベースファイルのパス | `./metrics.db` |
-| `POSTGRES_URL` | PostgreSQL 接続 URL | - |
-| `API_PORT` | API サーバーのポート | `8080` |
-| `API_HOST` | API サーバーのホスト | `localhost` |
-| `API_ENDPOINT` | CLI が使用する API エンドポイント | `http://localhost:8080` |
+| 変数名         | 説明                                          | デフォルト値            |
+| -------------- | --------------------------------------------- | ----------------------- |
+| `GITHUB_TOKEN` | GitHub Personal Access Token                  | (必須)                  |
+| `MODE`         | モード (`organization` または `user`)         | `organization`          |
+| `STORAGE_TYPE` | ストレージタイプ (`sqlite` または `postgres`) | `sqlite`                |
+| `SQLITE_PATH`  | SQLite データベースファイルのパス             | `./metrics.db`          |
+| `POSTGRES_URL` | PostgreSQL 接続 URL                           | -                       |
+| `API_PORT`     | API サーバーのポート                          | `8080`                  |
+| `API_HOST`     | API サーバーのホスト                          | `localhost`             |
+| `API_ENDPOINT` | CLI が使用する API エンドポイント             | `http://localhost:8080` |
 
 ## 使い方
 
@@ -69,6 +69,7 @@ cp .env.example .env
 ```
 
 **モードの切り替え:**
+
 - 環境変数 `MODE=organization` で組織モード（デフォルト）
 - 環境変数 `MODE=user` で個人アカウントモード
 
@@ -121,6 +122,8 @@ make run-api
 | GET | `/api/v1/orgs/:org/members/:member/metrics` | 特定メンバーメトリクス |
 | GET | `/api/v1/orgs/:org/repos/metrics` | 全リポジトリメトリクス |
 | GET | `/api/v1/orgs/:org/repos/:repo/metrics` | 特定リポジトリメトリクス |
+| GET | `/api/v1/orgs/:org/rankings/members/:type` | メンバーランキング（期間指定可） |
+| GET | `/api/v1/orgs/:org/rankings/repos/:type` | リポジトリランキング（期間指定可） |
 
 **User エンドポイント:**
 | メソッド | パス | 説明 |
@@ -129,17 +132,49 @@ make run-api
 | GET | `/api/v1/users/:user/metrics/timeseries` | ユーザー時系列メトリクス |
 | GET | `/api/v1/users/:user/repos/metrics` | 全リポジトリメトリクス |
 | GET | `/api/v1/users/:user/repos/:repo/metrics` | 特定リポジトリメトリクス |
+| GET | `/api/v1/users/:user/rankings/members/:type` | メンバーランキング（期間指定可） |
+| GET | `/api/v1/users/:user/rankings/repos/:type` | リポジトリランキング（期間指定可） |
 
 #### クエリパラメータ
 
-| パラメータ | 説明 | デフォルト |
-|-----------|------|-----------|
-| `start` | 開始日 (YYYY-MM-DD) | 30日前 |
-| `end` | 終了日 (YYYY-MM-DD) | 今日 |
-| `granularity` | 集計粒度 (day, week, month) | day |
-| `type` | メトリクスタイプ (commit, pull_request, deploy) | commit |
+| パラメータ    | 説明                                            | デフォルト |
+| ------------- | ----------------------------------------------- | ---------- |
+| `start`       | 開始日 (YYYY-MM-DD)                             | 30 日前    |
+| `end`         | 終了日 (YYYY-MM-DD)                             | 今日       |
+| `granularity` | 集計粒度 (day, week, month)                     | day        |
+| `type`        | メトリクスタイプ (commit, pull_request, deploy) | commit     |
+| `limit`       | ランキング取得件数                              | 10         |
+
+#### ランキングタイプ
+
+ランキング API (`/rankings/members/:type`, `/rankings/repos/:type`) で使用可能なタイプ:
+
+| タイプ         | 説明                                      |
+| -------------- | ----------------------------------------- |
+| `commits`      | Commit 数でランキング                     |
+| `prs`          | Pull Request 数でランキング               |
+| `code-changes` | コード変更量（追加+削除行数）でランキング |
+| `deploys`      | デプロイ数でランキング                    |
+
+#### ランキング API の使用例
+
+```bash
+# Commit数ランキング（過去30日、上位10件）
+GET /api/v1/orgs/example-org/rankings/members/commits?limit=10
+
+# PR数ランキング（期間指定、上位20件）
+GET /api/v1/orgs/example-org/rankings/members/prs?start=2024-01-01&end=2024-12-31&limit=20
+
+# コード変更量ランキング（過去7日、上位5件）
+GET /api/v1/orgs/example-org/rankings/members/code-changes?start=2024-12-01&end=2024-12-07&limit=5
+
+# リポジトリランキング（デプロイ数、期間指定）
+GET /api/v1/orgs/example-org/rankings/repos/deploys?start=2024-11-01&end=2024-11-30&limit=10
+```
 
 #### レスポンス例
+
+**Organization メトリクス:**
 
 ```json
 {
@@ -153,6 +188,60 @@ make run-api
     "deletions": 30000,
     "deploys": 100
   }
+}
+```
+
+**メンバーランキング (commits):**
+
+```json
+{
+  "data": [
+    {
+      "rank": 1,
+      "member": "alice",
+      "value": 234,
+      "commits": 234,
+      "prs": 45,
+      "additions": 12000,
+      "deletions": 8000,
+      "deploys": 12
+    },
+    {
+      "rank": 2,
+      "member": "bob",
+      "value": 189,
+      "commits": 189,
+      "prs": 32,
+      "additions": 9800,
+      "deletions": 6500,
+      "deploys": 8
+    }
+  ]
+}
+```
+
+**リポジトリランキング (prs):**
+
+```json
+{
+  "data": [
+    {
+      "rank": 1,
+      "repo": "frontend",
+      "value": 156,
+      "commits": 456,
+      "prs": 156,
+      "deploys": 45
+    },
+    {
+      "rank": 2,
+      "repo": "backend",
+      "value": 134,
+      "commits": 389,
+      "prs": 134,
+      "deploys": 38
+    }
+  ]
 }
 ```
 

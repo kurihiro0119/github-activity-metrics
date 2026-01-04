@@ -34,6 +34,10 @@ type Storage interface {
 	// List all repos with metrics
 	GetReposWithMetrics(ctx context.Context, org string, timeRange domain.TimeRange) ([]*domain.RepoMetrics, error)
 
+	// Rankings
+	GetMemberRanking(ctx context.Context, org string, rankingType domain.RankingType, timeRange domain.TimeRange, limit int) ([]*domain.MemberRanking, error)
+	GetRepoRanking(ctx context.Context, org string, rankingType domain.RankingType, timeRange domain.TimeRange, limit int) ([]*domain.RepoRanking, error)
+
 	// Migration
 	Migrate(ctx context.Context) error
 
