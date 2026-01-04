@@ -22,6 +22,9 @@ type Aggregator interface {
 	// GetMembersMetrics retrieves metrics for all members
 	GetMembersMetrics(ctx context.Context, org string, timeRange domain.TimeRange) ([]*domain.MemberMetrics, error)
 
+	// GetRepoMembersMetrics retrieves metrics for all members in a specific repository
+	GetRepoMembersMetrics(ctx context.Context, org, repo string, timeRange domain.TimeRange) ([]*domain.MemberMetrics, error)
+
 	// GetReposMetrics retrieves metrics for all repositories
 	GetReposMetrics(ctx context.Context, org string, timeRange domain.TimeRange) ([]*domain.RepoMetrics, error)
 
@@ -33,6 +36,15 @@ type Aggregator interface {
 
 	// GetRepoRanking retrieves repository rankings
 	GetRepoRanking(ctx context.Context, org string, rankingType domain.RankingType, timeRange domain.TimeRange, limit int) ([]*domain.RepoRanking, error)
+
+	// GetOrgTimeSeries retrieves time series data for an organization
+	GetOrgTimeSeries(ctx context.Context, org string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error)
+
+	// GetRepoTimeSeries retrieves time series data for a repository
+	GetRepoTimeSeries(ctx context.Context, org, repo string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error)
+
+	// GetMemberTimeSeries retrieves time series data for a member
+	GetMemberTimeSeries(ctx context.Context, org, member string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error)
 }
 
 // aggregator implements the Aggregator interface
@@ -65,6 +77,11 @@ func (a *aggregator) AggregateRepoMetrics(ctx context.Context, org, repo string,
 // GetMembersMetrics retrieves metrics for all members
 func (a *aggregator) GetMembersMetrics(ctx context.Context, org string, timeRange domain.TimeRange) ([]*domain.MemberMetrics, error) {
 	return a.storage.GetMembersWithMetrics(ctx, org, timeRange)
+}
+
+// GetRepoMembersMetrics retrieves metrics for all members in a specific repository
+func (a *aggregator) GetRepoMembersMetrics(ctx context.Context, org, repo string, timeRange domain.TimeRange) ([]*domain.MemberMetrics, error) {
+	return a.storage.GetRepoMembersWithMetrics(ctx, org, repo, timeRange)
 }
 
 // GetReposMetrics retrieves metrics for all repositories
@@ -126,6 +143,21 @@ func (a *aggregator) GetMemberRanking(ctx context.Context, org string, rankingTy
 // GetRepoRanking retrieves repository rankings
 func (a *aggregator) GetRepoRanking(ctx context.Context, org string, rankingType domain.RankingType, timeRange domain.TimeRange, limit int) ([]*domain.RepoRanking, error) {
 	return a.storage.GetRepoRanking(ctx, org, rankingType, timeRange, limit)
+}
+
+// GetOrgTimeSeries retrieves time series data for an organization
+func (a *aggregator) GetOrgTimeSeries(ctx context.Context, org string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error) {
+	return a.storage.GetOrgTimeSeries(ctx, org, timeRange)
+}
+
+// GetRepoTimeSeries retrieves time series data for a repository
+func (a *aggregator) GetRepoTimeSeries(ctx context.Context, org, repo string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error) {
+	return a.storage.GetRepoTimeSeries(ctx, org, repo, timeRange)
+}
+
+// GetMemberTimeSeries retrieves time series data for a member
+func (a *aggregator) GetMemberTimeSeries(ctx context.Context, org, member string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error) {
+	return a.storage.GetMemberTimeSeries(ctx, org, member, timeRange)
 }
 
 // truncateTime truncates a time to the start of the period based on granularity

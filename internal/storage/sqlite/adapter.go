@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -97,6 +98,39 @@ func (s *sqliteStorage) Migrate(ctx context.Context) error {
 
 	CREATE INDEX IF NOT EXISTS idx_members_owner ON members(owner);
 	CREATE INDEX IF NOT EXISTS idx_members_owner_type ON members(owner_type);
+
+	CREATE TABLE IF NOT EXISTS collection_batches (
+		id TEXT PRIMARY KEY,
+		mode TEXT NOT NULL,
+		owner TEXT NOT NULL,
+		start_date TIMESTAMP NOT NULL,
+		end_date TIMESTAMP NOT NULL,
+		status TEXT NOT NULL DEFAULT 'in_progress',
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_collection_batches_owner ON collection_batches(owner);
+	CREATE INDEX IF NOT EXISTS idx_collection_batches_status ON collection_batches(status);
+	CREATE INDEX IF NOT EXISTS idx_collection_batches_mode_owner_dates ON collection_batches(mode, owner, start_date, end_date);
+
+	CREATE TABLE IF NOT EXISTS batch_repositories (
+		batch_id TEXT NOT NULL,
+		owner TEXT NOT NULL,
+		repo_name TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		events_count INTEGER NOT NULL DEFAULT 0,
+		started_at TIMESTAMP,
+		completed_at TIMESTAMP,
+		error TEXT,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (batch_id, owner, repo_name)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_batch_repositories_batch_id ON batch_repositories(batch_id);
+	CREATE INDEX IF NOT EXISTS idx_batch_repositories_status ON batch_repositories(status);
+	CREATE INDEX IF NOT EXISTS idx_batch_repositories_owner_repo ON batch_repositories(owner, repo_name);
 	`
 
 	_, err = s.db.ExecContext(ctx, schema)
@@ -734,6 +768,97 @@ func (s *sqliteStorage) GetMembersWithMetrics(ctx context.Context, org string, t
 	return metrics, nil
 }
 
+// GetRepoMembersWithMetrics retrieves all members with their metrics for a specific repository
+func (s *sqliteStorage) GetRepoMembersWithMetrics(ctx context.Context, org, repo string, timeRange domain.TimeRange) ([]*domain.MemberMetrics, error) {
+	query := `
+		SELECT DISTINCT member FROM events
+		WHERE owner = ? AND repo = ? AND timestamp >= ? AND timestamp <= ?
+		ORDER BY member
+	`
+	rows, err := s.db.QueryContext(ctx, query, org, repo, timeRange.Start, timeRange.End)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var memberNames []string
+	for rows.Next() {
+		var member string
+		if err := rows.Scan(&member); err != nil {
+			return nil, err
+		}
+		memberNames = append(memberNames, member)
+	}
+
+	var metrics []*domain.MemberMetrics
+	for _, member := range memberNames {
+		// Get metrics for this member in this specific repo
+		memberMetrics := &domain.MemberMetrics{
+			Member:    member,
+			TimeRange: timeRange,
+		}
+
+		// Get commits count for this repo
+		err := s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM events 
+			WHERE owner = ? AND repo = ? AND member = ? AND type = 'commit' AND timestamp >= ? AND timestamp <= ?
+		`, org, repo, member, timeRange.Start, timeRange.End).Scan(&memberMetrics.Commits)
+		if err != nil {
+			return nil, err
+		}
+
+		// Get PRs count for this repo
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM events 
+			WHERE owner = ? AND repo = ? AND member = ? AND type = 'pull_request' AND timestamp >= ? AND timestamp <= ?
+		`, org, repo, member, timeRange.Start, timeRange.End).Scan(&memberMetrics.PRs)
+		if err != nil {
+			return nil, err
+		}
+
+		// Get deploys count for this repo
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM events 
+			WHERE owner = ? AND repo = ? AND member = ? AND type = 'deploy' AND timestamp >= ? AND timestamp <= ?
+		`, org, repo, member, timeRange.Start, timeRange.End).Scan(&memberMetrics.Deploys)
+		if err != nil {
+			return nil, err
+		}
+
+		// Get additions and deletions from commit events for this repo
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT data FROM events 
+			WHERE owner = ? AND repo = ? AND member = ? AND type = 'commit' AND timestamp >= ? AND timestamp <= ?
+		`, org, repo, member, timeRange.Start, timeRange.End)
+		if err != nil {
+			return nil, err
+		}
+
+		for rows.Next() {
+			var dataStr string
+			if err := rows.Scan(&dataStr); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var data map[string]interface{}
+			if err := json.Unmarshal([]byte(dataStr), &data); err != nil {
+				continue
+			}
+			if additions, ok := data["additions"].(float64); ok {
+				memberMetrics.Additions += int64(additions)
+			}
+			if deletions, ok := data["deletions"].(float64); ok {
+				memberMetrics.Deletions += int64(deletions)
+			}
+		}
+		rows.Close()
+
+		metrics = append(metrics, memberMetrics)
+	}
+
+	return metrics, nil
+}
+
 // GetReposWithMetrics retrieves all repos with their metrics
 func (s *sqliteStorage) GetReposWithMetrics(ctx context.Context, org string, timeRange domain.TimeRange) ([]*domain.RepoMetrics, error) {
 	query := `
@@ -980,6 +1105,308 @@ func (s *sqliteStorage) GetRepoRanking(ctx context.Context, org string, rankingT
 	}
 
 	return rankings, nil
+}
+
+// CreateOrGetBatch creates a new batch or returns existing one with same parameters
+func (s *sqliteStorage) CreateOrGetBatch(ctx context.Context, batch *domain.CollectionBatch) (*domain.CollectionBatch, error) {
+	// Check if batch with same parameters exists
+	var existingID, existingStatus string
+	var existingCreatedAt, existingUpdatedAt time.Time
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, status, created_at, updated_at
+		FROM collection_batches
+		WHERE mode = ? AND owner = ? AND start_date = ? AND end_date = ?
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, batch.Mode, batch.Owner, batch.StartDate, batch.EndDate).Scan(&existingID, &existingStatus, &existingCreatedAt, &existingUpdatedAt)
+
+	if err == nil {
+		// Existing batch found
+		batch.ID = existingID
+		batch.Status = existingStatus
+		batch.CreatedAt = existingCreatedAt
+		batch.UpdatedAt = existingUpdatedAt
+		return batch, nil
+	}
+
+	// Create new batch
+	if batch.ID == "" {
+		batch.ID = fmt.Sprintf("%s-%s-%d-%d", batch.Mode, batch.Owner, batch.StartDate.Unix(), batch.EndDate.Unix())
+	}
+	now := time.Now()
+	if batch.CreatedAt.IsZero() {
+		batch.CreatedAt = now
+	}
+	batch.UpdatedAt = now
+
+	query := `
+		INSERT INTO collection_batches (id, mode, owner, start_date, end_date, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err = s.db.ExecContext(ctx, query,
+		batch.ID, batch.Mode, batch.Owner, batch.StartDate, batch.EndDate, batch.Status, batch.CreatedAt, batch.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	return batch, nil
+}
+
+// GetBatch retrieves a batch by ID
+func (s *sqliteStorage) GetBatch(ctx context.Context, batchID string) (*domain.CollectionBatch, error) {
+	var batch domain.CollectionBatch
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, mode, owner, start_date, end_date, status, created_at, updated_at
+		FROM collection_batches
+		WHERE id = ?
+	`, batchID).Scan(
+		&batch.ID, &batch.Mode, &batch.Owner, &batch.StartDate, &batch.EndDate,
+		&batch.Status, &batch.CreatedAt, &batch.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &batch, nil
+}
+
+// UpdateBatchStatus updates the status of a batch
+func (s *sqliteStorage) UpdateBatchStatus(ctx context.Context, batchID string, status string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE collection_batches
+		SET status = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, status, batchID)
+	return err
+}
+
+// GetCompletedReposForBatch returns a map of completed repository names for a batch
+func (s *sqliteStorage) GetCompletedReposForBatch(ctx context.Context, batchID string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT repo_name
+		FROM batch_repositories
+		WHERE batch_id = ? AND status = 'completed'
+	`, batchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	completed := make(map[string]bool)
+	for rows.Next() {
+		var repoName string
+		if err := rows.Scan(&repoName); err != nil {
+			return nil, err
+		}
+		completed[repoName] = true
+	}
+	return completed, nil
+}
+
+// SaveBatchRepository saves or updates a batch repository status
+func (s *sqliteStorage) SaveBatchRepository(ctx context.Context, batchRepo *domain.BatchRepository) error {
+	query := `
+		INSERT OR REPLACE INTO batch_repositories 
+		(batch_id, owner, repo_name, status, events_count, started_at, completed_at, error, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err := s.db.ExecContext(ctx, query,
+		batchRepo.BatchID, batchRepo.Owner, batchRepo.RepoName, batchRepo.Status,
+		batchRepo.EventsCount, batchRepo.StartedAt, batchRepo.CompletedAt, batchRepo.Error,
+		batchRepo.CreatedAt, batchRepo.UpdatedAt)
+	return err
+}
+
+// UpdateBatchRepositoryStatus updates the status of a repository in a batch
+func (s *sqliteStorage) UpdateBatchRepositoryStatus(ctx context.Context, batchID, owner, repoName, status string, eventsCount int, err error) error {
+	now := time.Now()
+	var startedAt, completedAt *time.Time
+	var errorMsg string
+
+	if status == "processing" {
+		startedAt = &now
+	} else if status == "completed" {
+		completedAt = &now
+	} else if status == "failed" && err != nil {
+		errorMsg = err.Error()
+	}
+
+	query := `
+		UPDATE batch_repositories
+		SET status = ?, events_count = ?, started_at = COALESCE(?, started_at), 
+		    completed_at = COALESCE(?, completed_at), error = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE batch_id = ? AND owner = ? AND repo_name = ?
+	`
+	_, updateErr := s.db.ExecContext(ctx, query, status, eventsCount, startedAt, completedAt, errorMsg, batchID, owner, repoName)
+	if updateErr != nil {
+		// If update fails, try insert
+		batchRepo := &domain.BatchRepository{
+			BatchID:     batchID,
+			Owner:       owner,
+			RepoName:    repoName,
+			Status:      status,
+			EventsCount: eventsCount,
+			StartedAt:   startedAt,
+			CompletedAt: completedAt,
+			Error:       errorMsg,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		return s.SaveBatchRepository(ctx, batchRepo)
+	}
+	return updateErr
+}
+
+// GetOrgTimeSeries retrieves time series data for an organization
+func (s *sqliteStorage) GetOrgTimeSeries(ctx context.Context, org string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error) {
+	return s.getTimeSeries(ctx, org, "", "", timeRange)
+}
+
+// GetRepoTimeSeries retrieves time series data for a repository
+func (s *sqliteStorage) GetRepoTimeSeries(ctx context.Context, org, repo string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error) {
+	return s.getTimeSeries(ctx, org, repo, "", timeRange)
+}
+
+// GetMemberTimeSeries retrieves time series data for a member
+func (s *sqliteStorage) GetMemberTimeSeries(ctx context.Context, org, member string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error) {
+	return s.getTimeSeries(ctx, org, "", member, timeRange)
+}
+
+// getTimeSeries is a helper function to get time series data
+func (s *sqliteStorage) getTimeSeries(ctx context.Context, org, repo, member string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error) {
+	// Group by period based on granularity
+	var dateFormat string
+	switch timeRange.Granularity {
+	case "day":
+		dateFormat = "date(timestamp)"
+	case "month":
+		dateFormat = "strftime('%%Y-%%m', timestamp) || '-01'"
+	default:
+		dateFormat = "date(timestamp)"
+	}
+
+	// Build query based on filters
+	query := fmt.Sprintf(`
+		SELECT 
+			%s as period,
+			SUM(CASE WHEN type = 'commit' THEN 1 ELSE 0 END) as commits,
+			SUM(CASE WHEN type = 'pull_request' THEN 1 ELSE 0 END) as prs,
+			SUM(CASE WHEN type = 'deploy' THEN 1 ELSE 0 END) as deploys,
+			SUM(CASE WHEN type = 'commit' THEN CAST(json_extract(data, '$.additions') AS INTEGER) ELSE 0 END) as additions,
+			SUM(CASE WHEN type = 'commit' THEN CAST(json_extract(data, '$.deletions') AS INTEGER) ELSE 0 END) as deletions
+		FROM events
+		WHERE owner = ? AND timestamp >= ? AND timestamp <= ?
+	`, dateFormat)
+	args := []interface{}{org, timeRange.Start, timeRange.End}
+
+	if repo != "" {
+		query += " AND repo = ?"
+		args = append(args, repo)
+	}
+
+	if member != "" {
+		query += " AND member = ?"
+		args = append(args, member)
+	}
+
+	query += " GROUP BY period ORDER BY period"
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var dataPoints []domain.DetailedTimeSeriesMetric
+	for rows.Next() {
+		var timestampStr string
+		var commits, prs, additions, deletions, deploys int64
+
+		if err := rows.Scan(&timestampStr, &commits, &prs, &deploys, &additions, &deletions); err != nil {
+			return nil, err
+		}
+
+		// Parse timestamp string to time.Time
+		timestamp, err := time.Parse("2006-01-02", timestampStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse timestamp %s: %w", timestampStr, err)
+		}
+
+		dataPoints = append(dataPoints, domain.DetailedTimeSeriesMetric{
+			Timestamp: timestamp,
+			Commits:   commits,
+			PRs:       prs,
+			Additions: additions,
+			Deletions: deletions,
+			Deploys:   deploys,
+		})
+	}
+
+	// Fill in missing periods
+	filledDataPoints := s.fillTimeSeriesGaps(dataPoints, timeRange)
+
+	return &domain.DetailedTimeSeriesData{
+		Granularity: timeRange.Granularity,
+		DataPoints:  filledDataPoints,
+	}, nil
+}
+
+// fillTimeSeriesGaps fills in missing periods with zero values
+func (s *sqliteStorage) fillTimeSeriesGaps(dataPoints []domain.DetailedTimeSeriesMetric, timeRange domain.TimeRange) []domain.DetailedTimeSeriesMetric {
+	if len(dataPoints) == 0 {
+		return dataPoints
+	}
+
+	// Create a map of existing timestamps
+	existingMap := make(map[time.Time]domain.DetailedTimeSeriesMetric)
+	for _, dp := range dataPoints {
+		existingMap[truncateTimeForGranularity(dp.Timestamp, timeRange.Granularity)] = dp
+	}
+
+	// Generate all periods in the range
+	var filled []domain.DetailedTimeSeriesMetric
+	current := truncateTimeForGranularity(timeRange.Start, timeRange.Granularity)
+	end := truncateTimeForGranularity(timeRange.End, timeRange.Granularity)
+
+	for !current.After(end) {
+		if dp, exists := existingMap[current]; exists {
+			filled = append(filled, dp)
+		} else {
+			filled = append(filled, domain.DetailedTimeSeriesMetric{
+				Timestamp: current,
+				Commits:   0,
+				PRs:       0,
+				Additions: 0,
+				Deletions: 0,
+				Deploys:   0,
+			})
+		}
+		current = getNextPeriodForGranularity(current, timeRange.Granularity)
+	}
+
+	return filled
+}
+
+// truncateTimeForGranularity truncates a time to the start of the period
+func truncateTimeForGranularity(t time.Time, granularity string) time.Time {
+	switch granularity {
+	case "day":
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+	case "month":
+		return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+	default:
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+	}
+}
+
+// getNextPeriodForGranularity returns the start of the next period
+func getNextPeriodForGranularity(t time.Time, granularity string) time.Time {
+	switch granularity {
+	case "day":
+		return t.AddDate(0, 0, 1)
+	case "month":
+		return t.AddDate(0, 1, 0)
+	default:
+		return t.AddDate(0, 0, 1)
+	}
 }
 
 // Close closes the database connection

@@ -77,6 +77,24 @@ func (h *Handler) GetRepoMetrics(c *gin.Context) {
 	})
 }
 
+// GetRepoMembersMetrics returns metrics for all members in a specific repository
+// GET /api/v1/orgs/:org/repos/:repo/members/metrics
+func (h *Handler) GetRepoMembersMetrics(c *gin.Context) {
+	org := c.Param("org")
+	repo := c.Param("repo")
+	timeRange := parseTimeRange(c)
+
+	metrics, err := h.aggregator.GetRepoMembersMetrics(c.Request.Context(), org, repo, timeRange)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": metrics,
+	})
+}
+
 // GetMembersMetrics returns metrics for all members
 // GET /api/v1/orgs/:org/members/metrics
 func (h *Handler) GetMembersMetrics(c *gin.Context) {
@@ -224,6 +242,115 @@ func (h *Handler) GetUserRepoMetrics(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"data": metrics,
+	})
+}
+
+// GetUserRepoMembersMetrics returns metrics for all members in a user's specific repository
+// GET /api/v1/users/:user/repos/:repo/members/metrics
+func (h *Handler) GetUserRepoMembersMetrics(c *gin.Context) {
+	user := c.Param("user")
+	repo := c.Param("repo")
+	timeRange := parseTimeRange(c)
+
+	// Use org repo members metrics aggregator (user is stored as org in the database)
+	metrics, err := h.aggregator.GetRepoMembersMetrics(c.Request.Context(), user, repo, timeRange)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": metrics,
+	})
+}
+
+// GetOrgTimeSeriesDetailed returns detailed time series data for an organization
+// GET /api/v1/orgs/:org/metrics/timeseries/detailed
+func (h *Handler) GetOrgTimeSeriesDetailed(c *gin.Context) {
+	org := c.Param("org")
+	timeRange := parseTimeRange(c)
+
+	data, err := h.aggregator.GetOrgTimeSeries(c.Request.Context(), org, timeRange)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": data,
+	})
+}
+
+// GetRepoTimeSeriesDetailed returns detailed time series data for a repository
+// GET /api/v1/orgs/:org/repos/:repo/metrics/timeseries
+func (h *Handler) GetRepoTimeSeriesDetailed(c *gin.Context) {
+	org := c.Param("org")
+	repo := c.Param("repo")
+	timeRange := parseTimeRange(c)
+
+	data, err := h.aggregator.GetRepoTimeSeries(c.Request.Context(), org, repo, timeRange)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": data,
+	})
+}
+
+// GetMemberTimeSeriesDetailed returns detailed time series data for a member
+// GET /api/v1/orgs/:org/members/:member/metrics/timeseries
+func (h *Handler) GetMemberTimeSeriesDetailed(c *gin.Context) {
+	org := c.Param("org")
+	member := c.Param("member")
+	timeRange := parseTimeRange(c)
+
+	data, err := h.aggregator.GetMemberTimeSeries(c.Request.Context(), org, member, timeRange)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": data,
+	})
+}
+
+// GetUserTimeSeriesDetailed returns detailed time series data for a user
+// GET /api/v1/users/:user/metrics/timeseries/detailed
+func (h *Handler) GetUserTimeSeriesDetailed(c *gin.Context) {
+	user := c.Param("user")
+	timeRange := parseTimeRange(c)
+
+	// Use org time series aggregator (user is stored as org in the database)
+	data, err := h.aggregator.GetOrgTimeSeries(c.Request.Context(), user, timeRange)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": data,
+	})
+}
+
+// GetUserRepoTimeSeriesDetailed returns detailed time series data for a user repository
+// GET /api/v1/users/:user/repos/:repo/metrics/timeseries
+func (h *Handler) GetUserRepoTimeSeriesDetailed(c *gin.Context) {
+	user := c.Param("user")
+	repo := c.Param("repo")
+	timeRange := parseTimeRange(c)
+
+	// Use org repo time series aggregator (user is stored as org in the database)
+	data, err := h.aggregator.GetRepoTimeSeries(c.Request.Context(), user, repo, timeRange)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": data,
 	})
 }
 

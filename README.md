@@ -13,7 +13,7 @@ GitHub Organization の開発活動データを収集・集計し、開発チー
 
 ## 必要条件
 
-- Go 1.21 以上
+- Go 1.25 以上
 - GitHub Personal Access Token（repo, read:org スコープが必要）
 
 ## インストール
@@ -75,6 +75,8 @@ cp .env.example .env
 
 #### メトリクス表示
 
+**Organization モード (`MODE=organization`):**
+
 ```bash
 # Organization 全体のメトリクスを表示
 ./bin/github-metrics show <org-name>
@@ -91,6 +93,27 @@ cp .env.example .env
 # 特定リポジトリのメトリクスを表示
 ./bin/github-metrics show repo <org-name> <repo-name>
 ```
+
+**User モード (`MODE=user`):**
+
+```bash
+# ユーザー全体のメトリクスを表示
+./bin/github-metrics show <username>
+
+# コントリビューター別メトリクスを表示（フォークやコラボレーター含む）
+./bin/github-metrics show members <username>
+
+# 特定コントリビューターのメトリクスを表示
+./bin/github-metrics show member <username> <contributor-username>
+
+# リポジトリ別メトリクスを表示
+./bin/github-metrics show repos <username>
+
+# 特定リポジトリのメトリクスを表示
+./bin/github-metrics show repo <username> <repo-name>
+```
+
+> **注意:** User モードでも、リポジトリにコントリビュートしたすべてのユーザー（フォークやコラボレーター含む）がメンバーとして識別されます。
 
 #### オプション
 
@@ -117,11 +140,15 @@ make run-api
 |---------|------|------|
 | GET | `/health` | ヘルスチェック |
 | GET | `/api/v1/orgs/:org/metrics` | Organization メトリクス |
-| GET | `/api/v1/orgs/:org/metrics/timeseries` | 時系列メトリクス |
+| GET | `/api/v1/orgs/:org/metrics/timeseries` | 時系列メトリクス（単一メトリクスタイプ） |
+| GET | `/api/v1/orgs/:org/metrics/timeseries/detailed` | 時系列メトリクス（詳細：全メトリクス含む） |
 | GET | `/api/v1/orgs/:org/members/metrics` | 全メンバーメトリクス |
 | GET | `/api/v1/orgs/:org/members/:member/metrics` | 特定メンバーメトリクス |
+| GET | `/api/v1/orgs/:org/members/:member/metrics/timeseries` | 特定メンバーの時系列メトリクス |
 | GET | `/api/v1/orgs/:org/repos/metrics` | 全リポジトリメトリクス |
 | GET | `/api/v1/orgs/:org/repos/:repo/metrics` | 特定リポジトリメトリクス |
+| GET | `/api/v1/orgs/:org/repos/:repo/metrics/timeseries` | 特定リポジトリの時系列メトリクス |
+| GET | `/api/v1/orgs/:org/repos/:repo/members/metrics` | 特定リポジトリの全メンバーメトリクス |
 | GET | `/api/v1/orgs/:org/rankings/members/:type` | メンバーランキング（期間指定可） |
 | GET | `/api/v1/orgs/:org/rankings/repos/:type` | リポジトリランキング（期間指定可） |
 
@@ -129,9 +156,12 @@ make run-api
 | メソッド | パス | 説明 |
 |---------|------|------|
 | GET | `/api/v1/users/:user/metrics` | ユーザーメトリクス |
-| GET | `/api/v1/users/:user/metrics/timeseries` | ユーザー時系列メトリクス |
+| GET | `/api/v1/users/:user/metrics/timeseries` | ユーザー時系列メトリクス（単一メトリクスタイプ） |
+| GET | `/api/v1/users/:user/metrics/timeseries/detailed` | ユーザー時系列メトリクス（詳細：全メトリクス含む） |
 | GET | `/api/v1/users/:user/repos/metrics` | 全リポジトリメトリクス |
 | GET | `/api/v1/users/:user/repos/:repo/metrics` | 特定リポジトリメトリクス |
+| GET | `/api/v1/users/:user/repos/:repo/metrics/timeseries` | 特定リポジトリの時系列メトリクス |
+| GET | `/api/v1/users/:user/repos/:repo/members/metrics` | 特定リポジトリの全メンバーメトリクス |
 | GET | `/api/v1/users/:user/rankings/members/:type` | メンバーランキング（期間指定可） |
 | GET | `/api/v1/users/:user/rankings/repos/:type` | リポジトリランキング（期間指定可） |
 
@@ -141,9 +171,11 @@ make run-api
 | ------------- | ----------------------------------------------- | ---------- |
 | `start`       | 開始日 (YYYY-MM-DD)                             | 30 日前    |
 | `end`         | 終了日 (YYYY-MM-DD)                             | 今日       |
-| `granularity` | 集計粒度 (day, week, month)                     | day        |
+| `granularity` | 集計粒度 (day, month)                           | day        |
 | `type`        | メトリクスタイプ (commit, pull_request, deploy) | commit     |
 | `limit`       | ランキング取得件数                              | 10         |
+
+> **注意:** 時系列データ API (`/metrics/timeseries/detailed`, `/repos/:repo/metrics/timeseries`, `/members/:member/metrics/timeseries`) では、`granularity` は `day` または `month` のみサポートされています。
 
 #### ランキングタイプ
 
@@ -243,6 +275,94 @@ GET /api/v1/orgs/example-org/rankings/repos/deploys?start=2024-11-01&end=2024-11
     }
   ]
 }
+```
+
+**時系列メトリクス (詳細):**
+
+```json
+{
+  "data": {
+    "granularity": "day",
+    "dataPoints": [
+      {
+        "timestamp": "2025-10-07T00:00:00Z",
+        "commits": 10,
+        "prs": 5,
+        "additions": 500,
+        "deletions": 200,
+        "deploys": 2
+      },
+      {
+        "timestamp": "2025-10-08T00:00:00Z",
+        "commits": 15,
+        "prs": 8,
+        "additions": 750,
+        "deletions": 300,
+        "deploys": 3
+      }
+    ]
+  }
+}
+```
+
+**特定リポジトリの全メンバーメトリクス:**
+
+```json
+{
+  "data": [
+    {
+      "member": "alice",
+      "commits": 50,
+      "prs": 10,
+      "additions": 5000,
+      "deletions": 2000,
+      "deploys": 5,
+      "timeRange": {
+        "start": "2024-01-01T00:00:00Z",
+        "end": "2024-12-31T23:59:59Z",
+        "granularity": "day"
+      }
+    },
+    {
+      "member": "bob",
+      "commits": 30,
+      "prs": 8,
+      "additions": 3000,
+      "deletions": 1500,
+      "deploys": 3,
+      "timeRange": {
+        "start": "2024-01-01T00:00:00Z",
+        "end": "2024-12-31T23:59:59Z",
+        "granularity": "day"
+      }
+    }
+  ]
+}
+```
+
+#### 時系列データ API の使用例
+
+```bash
+# 組織全体の詳細時系列データ（日単位、過去30日）
+GET /api/v1/orgs/example-org/metrics/timeseries/detailed?granularity=day
+
+# 組織全体の詳細時系列データ（月単位、期間指定）
+GET /api/v1/orgs/example-org/metrics/timeseries/detailed?start=2024-01-01&end=2024-12-31&granularity=month
+
+# 特定リポジトリの時系列データ（日単位）
+GET /api/v1/orgs/example-org/repos/frontend/metrics/timeseries?granularity=day
+
+# 特定リポジトリの全メンバーメトリクス
+GET /api/v1/orgs/example-org/repos/frontend/members/metrics?start=2024-01-01&end=2024-12-31
+
+# 特定メンバーの時系列データ（月単位）
+GET /api/v1/orgs/example-org/members/alice/metrics/timeseries?start=2024-01-01&end=2024-12-31&granularity=month
+
+# ユーザーアカウントの詳細時系列データ
+GET /api/v1/users/username/metrics/timeseries/detailed?granularity=day
+
+# ユーザーの特定リポジトリの全メンバーメトリクス
+GET /api/v1/users/username/repos/my-repo/members/metrics?start=2024-01-01&end=2024-12-31
 ```
 
 ## 開発

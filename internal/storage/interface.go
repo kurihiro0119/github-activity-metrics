@@ -31,12 +31,28 @@ type Storage interface {
 	// List all members with metrics
 	GetMembersWithMetrics(ctx context.Context, org string, timeRange domain.TimeRange) ([]*domain.MemberMetrics, error)
 
+	// List all members with metrics for a specific repository
+	GetRepoMembersWithMetrics(ctx context.Context, org, repo string, timeRange domain.TimeRange) ([]*domain.MemberMetrics, error)
+
 	// List all repos with metrics
 	GetReposWithMetrics(ctx context.Context, org string, timeRange domain.TimeRange) ([]*domain.RepoMetrics, error)
 
 	// Rankings
 	GetMemberRanking(ctx context.Context, org string, rankingType domain.RankingType, timeRange domain.TimeRange, limit int) ([]*domain.MemberRanking, error)
 	GetRepoRanking(ctx context.Context, org string, rankingType domain.RankingType, timeRange domain.TimeRange, limit int) ([]*domain.RepoRanking, error)
+
+	// Time series data
+	GetOrgTimeSeries(ctx context.Context, org string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error)
+	GetRepoTimeSeries(ctx context.Context, org, repo string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error)
+	GetMemberTimeSeries(ctx context.Context, org, member string, timeRange domain.TimeRange) (*domain.DetailedTimeSeriesData, error)
+
+	// Batch collection management
+	CreateOrGetBatch(ctx context.Context, batch *domain.CollectionBatch) (*domain.CollectionBatch, error)
+	GetBatch(ctx context.Context, batchID string) (*domain.CollectionBatch, error)
+	UpdateBatchStatus(ctx context.Context, batchID string, status string) error
+	GetCompletedReposForBatch(ctx context.Context, batchID string) (map[string]bool, error) // returns map[repoName]bool
+	SaveBatchRepository(ctx context.Context, batchRepo *domain.BatchRepository) error
+	UpdateBatchRepositoryStatus(ctx context.Context, batchID, owner, repoName, status string, eventsCount int, err error) error
 
 	// Migration
 	Migrate(ctx context.Context) error

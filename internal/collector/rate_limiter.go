@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -40,6 +41,7 @@ func (r *githubRateLimiter) Wait(ctx context.Context) error {
 	if r.remaining <= 10 {
 		waitDuration := time.Until(r.resetTime)
 		if waitDuration > 0 {
+			fmt.Printf("  Rate limit low (%d remaining), waiting %v until reset...\n", r.remaining, waitDuration.Round(time.Second))
 			r.mu.Unlock()
 			select {
 			case <-ctx.Done():
@@ -48,6 +50,7 @@ func (r *githubRateLimiter) Wait(ctx context.Context) error {
 			case <-time.After(waitDuration):
 				r.mu.Lock()
 			}
+			fmt.Printf("  Rate limit reset, continuing...\n")
 		}
 		// Reset after waiting
 		r.remaining = 5000
