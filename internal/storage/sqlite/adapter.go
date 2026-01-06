@@ -113,24 +113,6 @@ func (s *sqliteStorage) Migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_collection_batches_owner ON collection_batches(owner);
 	CREATE INDEX IF NOT EXISTS idx_collection_batches_status ON collection_batches(status);
 	CREATE INDEX IF NOT EXISTS idx_collection_batches_mode_owner_dates ON collection_batches(mode, owner, start_date, end_date);
-
-	CREATE TABLE IF NOT EXISTS batch_repositories (
-		batch_id TEXT NOT NULL,
-		owner TEXT NOT NULL,
-		repo_name TEXT NOT NULL,
-		status TEXT NOT NULL DEFAULT 'pending',
-		events_count INTEGER NOT NULL DEFAULT 0,
-		started_at TIMESTAMP,
-		completed_at TIMESTAMP,
-		error TEXT,
-		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		PRIMARY KEY (batch_id, owner, repo_name)
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_batch_repositories_batch_id ON batch_repositories(batch_id);
-	CREATE INDEX IF NOT EXISTS idx_batch_repositories_status ON batch_repositories(status);
-	CREATE INDEX IF NOT EXISTS idx_batch_repositories_owner_repo ON batch_repositories(owner, repo_name);
 	`
 
 	_, err = s.db.ExecContext(ctx, schema)
@@ -1176,83 +1158,6 @@ func (s *sqliteStorage) UpdateBatchStatus(ctx context.Context, batchID string, s
 		WHERE id = ?
 	`, status, batchID)
 	return err
-}
-
-// GetCompletedReposForBatch returns a map of completed repository names for a batch
-func (s *sqliteStorage) GetCompletedReposForBatch(ctx context.Context, batchID string) (map[string]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT repo_name
-		FROM batch_repositories
-		WHERE batch_id = ? AND status = 'completed'
-	`, batchID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	completed := make(map[string]bool)
-	for rows.Next() {
-		var repoName string
-		if err := rows.Scan(&repoName); err != nil {
-			return nil, err
-		}
-		completed[repoName] = true
-	}
-	return completed, nil
-}
-
-// SaveBatchRepository saves or updates a batch repository status
-func (s *sqliteStorage) SaveBatchRepository(ctx context.Context, batchRepo *domain.BatchRepository) error {
-	query := `
-		INSERT OR REPLACE INTO batch_repositories 
-		(batch_id, owner, repo_name, status, events_count, started_at, completed_at, error, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-	_, err := s.db.ExecContext(ctx, query,
-		batchRepo.BatchID, batchRepo.Owner, batchRepo.RepoName, batchRepo.Status,
-		batchRepo.EventsCount, batchRepo.StartedAt, batchRepo.CompletedAt, batchRepo.Error,
-		batchRepo.CreatedAt, batchRepo.UpdatedAt)
-	return err
-}
-
-// UpdateBatchRepositoryStatus updates the status of a repository in a batch
-func (s *sqliteStorage) UpdateBatchRepositoryStatus(ctx context.Context, batchID, owner, repoName, status string, eventsCount int, err error) error {
-	now := time.Now()
-	var startedAt, completedAt *time.Time
-	var errorMsg string
-
-	if status == "processing" {
-		startedAt = &now
-	} else if status == "completed" {
-		completedAt = &now
-	} else if status == "failed" && err != nil {
-		errorMsg = err.Error()
-	}
-
-	query := `
-		UPDATE batch_repositories
-		SET status = ?, events_count = ?, started_at = COALESCE(?, started_at), 
-		    completed_at = COALESCE(?, completed_at), error = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE batch_id = ? AND owner = ? AND repo_name = ?
-	`
-	_, updateErr := s.db.ExecContext(ctx, query, status, eventsCount, startedAt, completedAt, errorMsg, batchID, owner, repoName)
-	if updateErr != nil {
-		// If update fails, try insert
-		batchRepo := &domain.BatchRepository{
-			BatchID:     batchID,
-			Owner:       owner,
-			RepoName:    repoName,
-			Status:      status,
-			EventsCount: eventsCount,
-			StartedAt:   startedAt,
-			CompletedAt: completedAt,
-			Error:       errorMsg,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		}
-		return s.SaveBatchRepository(ctx, batchRepo)
-	}
-	return updateErr
 }
 
 // GetOrgTimeSeries retrieves time series data for an organization

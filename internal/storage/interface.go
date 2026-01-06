@@ -50,9 +50,6 @@ type Storage interface {
 	CreateOrGetBatch(ctx context.Context, batch *domain.CollectionBatch) (*domain.CollectionBatch, error)
 	GetBatch(ctx context.Context, batchID string) (*domain.CollectionBatch, error)
 	UpdateBatchStatus(ctx context.Context, batchID string, status string) error
-	GetCompletedReposForBatch(ctx context.Context, batchID string) (map[string]bool, error) // returns map[repoName]bool
-	SaveBatchRepository(ctx context.Context, batchRepo *domain.BatchRepository) error
-	UpdateBatchRepositoryStatus(ctx context.Context, batchID, owner, repoName, status string, eventsCount int, err error) error
 
 	// Migration
 	Migrate(ctx context.Context) error

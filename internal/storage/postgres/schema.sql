@@ -64,23 +64,3 @@ CREATE TABLE IF NOT EXISTS collection_batches (
 CREATE INDEX IF NOT EXISTS idx_collection_batches_owner ON collection_batches(owner);
 CREATE INDEX IF NOT EXISTS idx_collection_batches_status ON collection_batches(status);
 CREATE INDEX IF NOT EXISTS idx_collection_batches_mode_owner_dates ON collection_batches(mode, owner, start_date, end_date);
-
--- Batch repositories table (repository processing status in batches)
-CREATE TABLE IF NOT EXISTS batch_repositories (
-    batch_id TEXT NOT NULL,
-    owner TEXT NOT NULL,
-    repo_name TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    events_count INTEGER NOT NULL DEFAULT 0,
-    started_at TIMESTAMP,
-    completed_at TIMESTAMP,
-    error TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (batch_id, owner, repo_name),
-    FOREIGN KEY (batch_id) REFERENCES collection_batches(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_batch_repositories_batch_id ON batch_repositories(batch_id);
-CREATE INDEX IF NOT EXISTS idx_batch_repositories_status ON batch_repositories(status);
-CREATE INDEX IF NOT EXISTS idx_batch_repositories_owner_repo ON batch_repositories(owner, repo_name);

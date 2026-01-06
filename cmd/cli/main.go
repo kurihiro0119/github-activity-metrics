@@ -177,15 +177,6 @@ func runCollect(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Note: This batch was previously completed. Re-running to check for new data.\n")
 	}
 
-	// Get completed repositories for this batch
-	completedRepos, err := store.GetCompletedReposForBatch(ctx, batch.ID)
-	if err != nil {
-		return fmt.Errorf("failed to get completed repos: %w", err)
-	}
-	if len(completedRepos) > 0 {
-		fmt.Printf("Found %d already completed repositories (will be skipped)\n", len(completedRepos))
-	}
-
 	var repos []*domain.Repository
 	var totalEvents int
 
@@ -229,30 +220,13 @@ func runCollect(cmd *cobra.Command, args []string) error {
 				fmt.Printf("\rProgress: %.1f%% (%s)", progress*100, repo)
 			},
 			func(repo string, events []*domain.Event) error {
-				// Skip if already completed
-				if completedRepos[repo] {
-					fmt.Printf("\n  Skipping %s (already completed)\n", repo)
-					return nil
-				}
-
-				// Mark as processing
-				if err := store.UpdateBatchRepositoryStatus(ctx, batch.ID, target, repo, "processing", 0, nil); err != nil {
-					fmt.Printf("Warning: failed to update batch repo status for %s: %v\n", repo, err)
-				}
-
 				// Save events for this repository
 				if len(events) > 0 {
 					if err := store.SaveRawEvents(ctx, events); err != nil {
-						store.UpdateBatchRepositoryStatus(ctx, batch.ID, target, repo, "failed", 0, err)
 						return fmt.Errorf("failed to save events for %s: %w", repo, err)
 					}
 					totalEvents += len(events)
 					fmt.Printf("\n  Saved %d events for %s\n", len(events), repo)
-				}
-
-				// Mark as completed
-				if err := store.UpdateBatchRepositoryStatus(ctx, batch.ID, target, repo, "completed", len(events), nil); err != nil {
-					fmt.Printf("Warning: failed to update batch repo status for %s: %v\n", repo, err)
 				}
 
 				return nil
@@ -301,30 +275,13 @@ func runCollect(cmd *cobra.Command, args []string) error {
 				fmt.Printf("\rProgress: %.1f%% (%s)", progress*100, repo)
 			},
 			func(repo string, events []*domain.Event) error {
-				// Skip if already completed
-				if completedRepos[repo] {
-					fmt.Printf("\n  Skipping %s (already completed)\n", repo)
-					return nil
-				}
-
-				// Mark as processing
-				if err := store.UpdateBatchRepositoryStatus(ctx, batch.ID, target, repo, "processing", 0, nil); err != nil {
-					fmt.Printf("Warning: failed to update batch repo status for %s: %v\n", repo, err)
-				}
-
 				// Save events for this repository
 				if len(events) > 0 {
 					if err := store.SaveRawEvents(ctx, events); err != nil {
-						store.UpdateBatchRepositoryStatus(ctx, batch.ID, target, repo, "failed", 0, err)
 						return fmt.Errorf("failed to save events for %s: %w", repo, err)
 					}
 					totalEvents += len(events)
 					fmt.Printf("\n  Saved %d events for %s\n", len(events), repo)
-				}
-
-				// Mark as completed
-				if err := store.UpdateBatchRepositoryStatus(ctx, batch.ID, target, repo, "completed", len(events), nil); err != nil {
-					fmt.Printf("Warning: failed to update batch repo status for %s: %v\n", repo, err)
 				}
 
 				return nil
